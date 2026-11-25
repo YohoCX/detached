@@ -310,12 +310,12 @@ fn layout_key(cx: &App) -> String {
     if w.archive() {
         KEY.to_string()
     } else {
-        format!(
-            "session.{}.{}.layout",
-            w.id().unwrap_or_default(),
-            w.session_id()
-        )
+        session_key(w.id().unwrap_or_default(), w.session_id())
     }
+}
+
+fn session_key(workspace: &str, session: &str) -> String {
+    format!("session.{workspace}.{session}.layout")
 }
 
 fn areas(cx: &App) -> Vec<Entity<DockArea>> {
@@ -387,10 +387,7 @@ fn saved_focus(cx: &App) -> usize {
     ui_state::get::<SavedLayout>(&layout_key(cx), cx).map_or(0, |layout| layout.focus)
 }
 
-fn migrate(cx: &App) -> Option<DockAreaState> {
-    let w = Workspace::get(cx);
-    let workspace = w.id()?;
-    let session = w.session_id();
+fn migrate(workspace: &str, session: &str, cx: &App) -> Option<DockAreaState> {
     let old = ui_state::get::<DockAreaState>(KEY, cx)?;
     let mut tabs = PanelState {
         info: PanelInfo::tabs(0),
@@ -426,14 +423,64 @@ fn migrate(cx: &App) -> Option<DockAreaState> {
     })
 }
 
+fn session_layout(workspace: &str, session: &str, cx: &App) -> Option<DockAreaState> {
+    ui_state::get::<SavedLayout>(&session_key(workspace, session), cx)
+        .map(|layout| layout.dock)
+        .or_else(|| migrate(workspace, session, cx))
+        .filter(|layout| layout.version == Some(VERSION))
+}
+
+pub(crate) fn session_chats(workspace: &str, session: &str, cx: &App) -> Vec<(String, u32)> {
+    let key = session_key(workspace, session);
+    if let Some(area) = cx
+        .try_global::<Zones>()
+        .and_then(|zones| zones.areas.get(&key))
+    {
+        return docs(area.read(cx))
+            .into_iter()
+            .filter_map(|(_, _, tab)| {
+                let tab = tab.read(cx);
+                match &tab.doc {
+                    Doc::Chat { repo, n }
+                        if tab.workspace.as_deref() == Some(workspace)
+                            && tab.session.as_deref() == Some(session) =>
+                    {
+                        Some((repo.clone(), *n))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+    }
+    let Some(layout) = session_layout(workspace, session, cx) else {
+        return vec![];
+    };
+    fn collect(panel: &PanelState, workspace: &str, session: &str, chats: &mut Vec<(String, u32)>) {
+        if panel.panel_name == doc::NAME
+            && let PanelInfo::Panel(value) = &panel.info
+            && let Ok(saved) = doc::Saved::deserialize(value)
+            && saved.workspace.as_deref() == Some(workspace)
+            && saved.session.flatten().as_deref() == Some(session)
+            && let Doc::Chat { repo, n } = saved.doc
+        {
+            chats.push((repo, n));
+        }
+        for child in &panel.children {
+            collect(child, workspace, session, chats);
+        }
+    }
+    let mut chats = vec![];
+    collect(&layout.center, workspace, session, &mut chats);
+    chats
+}
+
 fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea> {
     let archive = key == KEY;
     let saved = if archive {
         ui_state::get::<DockAreaState>(&key, cx)
     } else {
-        ui_state::get::<SavedLayout>(&key, cx)
-            .map(|layout| layout.dock)
-            .or_else(|| migrate(cx))
+        let w = Workspace::get(cx);
+        session_layout(w.id().unwrap_or_default(), w.session_id(), cx)
     };
     let area = cx.new(|cx| {
         let mut area = DockArea::new("dock", Some(VERSION), window, cx)
