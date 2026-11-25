@@ -14,6 +14,8 @@ use kernel::session::{Answer, End, Item, Session, State as Run};
 use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
+use serde::Deserialize;
+use serde_json::Value;
 
 const COMMANDS: &str = "chat.commands";
 
@@ -56,7 +58,7 @@ pub struct Chat {
     /// Checks begun, and the latest whose answer is shown: an older one may finish later.
     checks: u64,
     seen: u64,
-    remembered: Vec<SlashCommand>,
+    remembered: Option<Vec<SlashCommand>>,
     configured: bool,
     /// It shows a past conversation.
     resumed: bool,
@@ -77,7 +79,7 @@ impl Chat {
         let (provider, choices) = defaults(cx).unwrap_or((&CLAUDE, Choices::default()));
         let workspace = Workspace::get(cx);
         Chat {
-            remembered: vec![],
+            remembered: None,
             repo,
             owner: workspace
                 .id()
@@ -124,7 +126,7 @@ impl Chat {
 
     /// Opens a session after the ones there, resuming `past` when given.
     fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) {
-        self.remembered.clear();
+        self.remembered = None;
         let mut spec = Spec::new(self.provider, &self.repo, Kind::Chat);
         spec.mode = self.mode().into();
         spec.model = self.model.clone();
@@ -168,9 +170,17 @@ impl Chat {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
                 let kept = std::mem::take(&mut s.refused)
                     .then(|| ["mode", "model", "effort"].map(|k| s.option(k).map(String::from)));
-                let commands = (!s.commands.is_empty() && s.commands != self.remembered)
-                    .then(|| s.commands.clone());
-                (commands, s.returned.take(), s.unsent.take(), ended, kept)
+                let commands = s
+                    .commands
+                    .as_ref()
+                    .filter(|c| Some(*c) != self.remembered.as_ref());
+                (
+                    commands.cloned(),
+                    s.returned.take(),
+                    s.unsent.take(),
+                    ended,
+                    kept,
+                )
             });
             if let Some(text) = returned {
                 self.draft = Some(text);
@@ -185,14 +195,16 @@ impl Chat {
                     (model.or(self.model.take()), effort.or(self.effort.take()));
             }
             if let Some(commands) = commands {
-                let mut all: BTreeMap<String, Vec<SlashCommand>> =
-                    ui_state::get(COMMANDS, cx).unwrap_or_default();
                 let key = self.command_key();
-                if all.get(&key) != Some(&commands) {
-                    all.insert(key, commands.clone());
+                let saved = ui_state::value(COMMANDS, cx).and_then(Value::as_object);
+                if let Ok(value) = serde_json::to_value(&commands)
+                    && saved.and_then(|all| all.get(&key)) != Some(&value)
+                {
+                    let mut all = saved.cloned().unwrap_or_default();
+                    all.insert(key, value);
                     ui_state::set(COMMANDS, all, cx);
                 }
-                self.remembered = commands;
+                self.remembered = Some(commands);
             }
             if let Some(text) = unsent {
                 self.send(text, cx);
@@ -221,32 +233,26 @@ impl Chat {
         format!("{}\0{}", self.provider.id, self.repo)
     }
 
-    pub fn commands(&self, cx: &App) -> Vec<SlashCommand> {
-        self.commands_of(self.current(), cx)
-    }
-
-    fn commands_of(&self, session: Option<&Entity<Session>>, cx: &App) -> Vec<SlashCommand> {
-        if let Some(s) = session.map(|s| s.read(cx))
-            && !s.commands.is_empty()
-        {
-            return s.commands.clone();
+    pub fn commands(&self, cx: &App) -> Option<Vec<SlashCommand>> {
+        if let Some(commands) = self.current().and_then(|s| s.read(cx).commands.as_ref()) {
+            return Some(commands.clone());
         }
-        let mut all: BTreeMap<String, Vec<SlashCommand>> =
-            ui_state::get(COMMANDS, cx).unwrap_or_default();
-        all.remove(&self.command_key())
+        let cached = ui_state::value(COMMANDS, cx);
+        let project = |key: &str| Vec::deserialize(cached?.get(key)?).ok();
+        project(&self.command_key())
             .or_else(|| {
                 if self.provider.id == CLAUDE.id {
-                    all.remove(&self.repo)
+                    project(&self.repo)
                 } else {
                     None
                 }
             })
-            .unwrap_or_else(|| {
-                Preset::read(Settings::get(cx))
+            .or_else(|| {
+                let commands = Preset::read(Settings::get(cx))
                     .providers
-                    .remove(self.provider.id)
-                    .unwrap_or_default()
-                    .commands
+                    .remove(self.provider.id)?
+                    .commands;
+                (!commands.is_empty()).then_some(commands)
             })
     }
 
@@ -392,9 +398,10 @@ impl Chat {
     /// turn ended well.
     pub fn cleared(&self, feed: &[((usize, usize), &Item)], cx: &App) -> Option<usize> {
         let lists = |k: usize| {
-            self.commands_of(self.sessions.get(k), cx)
-                .iter()
-                .any(|c| c.name == "clear")
+            self.sessions
+                .get(k)
+                .and_then(|s| s.read(cx).commands.as_deref())
+                .is_some_and(|commands| commands.iter().any(|c| c.name == "clear"))
         };
         let ended = |i: usize| {
             let end = feed[i + 1..].iter().find_map(|(_, it)| match it {

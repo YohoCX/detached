@@ -122,6 +122,22 @@ fn an_opened_session_remembers_its_provider_s_models_when_they_differ(
     wait_until(cx, |cx| loaded(cx) && remembered(cx) == models);
 }
 
+#[gpui::test]
+fn a_failed_capability_cache_save_is_reported_and_the_session_continues(cx: &mut TestAppContext) {
+    let f = boot_fake(cx, Fake::Claude);
+    let settings = f.core.config_dir.join("settings.json");
+    std::fs::remove_file(&settings).unwrap();
+    std::fs::create_dir(&settings).unwrap();
+    let s = open(&f, Kind::Chat, cx);
+    wait_until(cx, |cx| {
+        Activity::global(cx).read(cx).log.iter().any(|e| {
+            e.level == crate::activity::Level::Error
+                && e.text.contains("Could not cache claude capabilities")
+        })
+    });
+    assert_eq!(turn(&s, "say still here", cx), "still here");
+}
+
 /// A real adapter and `claude` may take this long to start or answer.
 const START: Duration = Duration::from_secs(60);
 

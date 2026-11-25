@@ -70,6 +70,7 @@ impl Preset {
         self.providers.get(provider).map_or(&[], |c| &c.efforts)
     }
 
+    /// Nonempty models replace models and efforts. For account-only updates, pass empty models and `None` for efforts.
     pub fn remember(
         core: &AppState,
         provider: &str,
@@ -201,5 +202,36 @@ mod tests {
         Preset::remember(&sb.state, "codex", vec![plain, tuned], efforts, None).unwrap();
         let raw: Value = saved().block(BLOCK).unwrap();
         assert!(raw["providers"]["codex"].get("efforts").is_none());
+    }
+
+    #[test]
+    fn an_account_only_report_keeps_the_cached_models_and_efforts() {
+        let sb = Sandbox::new();
+        let models = vec![Model {
+            value: "plain".into(),
+            ..Model::default()
+        }];
+        Preset::remember(
+            &sb.state,
+            "codex",
+            models.clone(),
+            Some(vec!["high".into()]),
+            None,
+        )
+        .unwrap();
+        let account = Account {
+            plan: "Pro".into(),
+            email: None,
+        };
+        Preset::remember(&sb.state, "codex", vec![], None, Some(account.clone())).unwrap();
+        let preset = Preset::read(&Settings::load(&sb.state.config_dir));
+        assert_eq!(preset.models("codex"), models);
+        assert_eq!(preset.efforts("codex"), ["high"]);
+        assert_eq!(preset.providers["codex"].account.as_ref(), Some(&account));
+
+        Preset::remember(&sb.state, "codex", models, None, None).unwrap();
+        let preset = Preset::read(&Settings::load(&sb.state.config_dir));
+        assert!(preset.efforts("codex").is_empty());
+        assert_eq!(preset.providers["codex"].account, Some(account));
     }
 }

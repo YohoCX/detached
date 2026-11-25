@@ -60,7 +60,12 @@ fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppCont
         }
         let s = open(&f, kind, cx);
         let names: Vec<String> = s.read_with(cx, |s, _| {
-            s.commands.iter().map(|c| c.name.clone()).collect()
+            s.commands
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
         });
         let has = |n: &str| names.iter().any(|m| m == n);
         assert!(

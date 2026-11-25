@@ -60,8 +60,11 @@ pub fn init(dir: &Path, cx: &mut App) {
 
 /// None when unset or of another type.
 pub fn get<T: DeserializeOwned>(key: &str, cx: &App) -> Option<T> {
-    let v = cx.try_global::<UiState>()?.values.get(key)?;
-    T::deserialize(v).ok()
+    T::deserialize(value(key, cx)?).ok()
+}
+
+pub fn value<'a>(key: &str, cx: &'a App) -> Option<&'a Value> {
+    cx.try_global::<UiState>()?.values.get(key)
 }
 
 /// Saves at once; a failed write is ignored, as the web view's storage was.

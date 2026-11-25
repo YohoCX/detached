@@ -43,8 +43,6 @@ struct Page {
 /// A provider's model, effort and mode; an empty value is the provider's default.
 struct Fields {
     p: &'static Provider,
-    models: Vec<Model>,
-    session_efforts: Vec<String>,
     picks: [Pick; 3],
     saved: [String; 3],
     _picks: Vec<Subscription>,
@@ -78,19 +76,14 @@ impl Fields {
     ) -> Self {
         let choices = preset.providers.get(p.id).cloned().unwrap_or_default();
         let saved = [choices.model, choices.effort, choices.mode].map(Option::unwrap_or_default);
-        let models = choices.models;
-        let session_efforts = choices.efforts;
-        let listed = models.iter().filter(|m| m.value != "default");
+        let models = preset.models(p.id);
         let modes = p
             .modes
             .iter()
             .map(|(id, label, _)| (id.to_string(), label.to_string()));
         let opts = [
-            options(
-                listed.map(|m| (m.value.clone(), m.label.clone())),
-                &saved[0],
-            ),
-            efforts(&models, &session_efforts, &saved[0], &saved[1]),
+            model_options(models, &saved[0]),
+            efforts(models, preset.efforts(p.id), &saved[0], &saved[1]),
             options(modes, &saved[2]),
         ];
         let picks = opts.map(|(opts, at)| {
@@ -100,9 +93,10 @@ impl Fields {
         let changed =
             move |page: &mut Page, model: bool, window: &mut Window, cx: &mut Context<Page>| {
                 if let Some(f) = page.fields.iter().find(|f| f.p.id == id).filter(|_| model) {
+                    let preset = Preset::read(Settings::get(cx));
                     let (opts, _) = efforts(
-                        &f.models,
-                        &f.session_efforts,
+                        preset.models(id),
+                        preset.efforts(id),
                         &value(&f.picks[0], cx),
                         &f.saved[1],
                     );
@@ -130,8 +124,6 @@ impl Fields {
             .collect();
         Self {
             p,
-            models,
-            session_efforts,
             picks,
             saved,
             _picks,
@@ -141,6 +133,26 @@ impl Fields {
     fn values(&self, cx: &App) -> [String; 3] {
         self.picks.each_ref().map(|p| value(p, cx))
     }
+
+    fn refresh(&self, preset: &Preset, window: &mut Window, cx: &mut Context<Page>) {
+        let models = preset.models(self.p.id);
+        let [model, effort, _] = self.values(cx);
+        let opts = [
+            model_options(models, &self.saved[0]),
+            efforts(models, preset.efforts(self.p.id), &model, &self.saved[1]),
+        ];
+        for ((pick, selected), (mut opts, _)) in self.picks.iter().zip([model, effort]).zip(opts) {
+            if !opts.iter().any(|o| o.0 == selected) {
+                opts.push(Opt(selected.clone(), selected.into()));
+            }
+            pick.update(cx, |s, cx| s.set_items(opts, window, cx));
+        }
+    }
+}
+
+fn model_options(models: &[Model], saved: &str) -> (Vec<Opt<String>>, usize) {
+    let listed = models.iter().filter(|m| m.value != "default");
+    options(listed.map(|m| (m.value.clone(), m.label.clone())), saved)
 }
 
 fn efforts(
@@ -163,7 +175,17 @@ impl Page {
         let provider = cx.new(|cx| SelectState::new(vec![], None, window, cx));
         let mut page = Self {
             _subs: [
-                cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+                cx.observe_in(
+                    &Settings::global(cx),
+                    window,
+                    |page: &mut Page, _, window, cx| {
+                        let preset = Preset::read(Settings::get(cx));
+                        for field in &page.fields {
+                            field.refresh(&preset, window, cx);
+                        }
+                        cx.notify();
+                    },
+                ),
                 cx.subscribe(&provider, |_, _, _: &SelectEvent<_>, cx| cx.notify()),
             ],
             provider,
@@ -272,12 +294,16 @@ impl Page {
         .detach();
     }
 
-    fn choices(&self, f: &Fields, cx: &App) -> impl IntoElement + use<> {
+    fn choices(&self, f: &Fields, preset: &Preset, cx: &App) -> impl IntoElement + use<> {
         let id = |key| SharedString::from(format!("chat.defaults.{}.{key}", f.p.id));
         let mode = value(&f.picks[2], cx);
         let mode = f.p.modes.iter().find(|m| m.0 == mode).map(|m| m.2.into());
         let none = format!("Models are listed after the first chat with {}.", f.p.name);
-        let details = [f.models.is_empty().then(|| none.into()), None, mode];
+        let details = [
+            preset.models(f.p.id).is_empty().then(|| none.into()),
+            None,
+            mode,
+        ];
         let rows = [
             ("model", "Model"),
             ("effort", "Effort"),
@@ -309,7 +335,12 @@ impl Render for Page {
                     .text_color(theme(cx).error)
             }))
             .child(save);
-        let fields: Vec<_> = self.fields.iter().map(|f| self.choices(f, cx)).collect();
+        let preset = Preset::read(Settings::get(cx));
+        let fields: Vec<_> = self
+            .fields
+            .iter()
+            .map(|f| self.choices(f, &preset, cx))
+            .collect();
         layout(
             "settings.chat",
             "Chat",
