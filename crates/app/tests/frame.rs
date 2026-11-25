@@ -338,10 +338,13 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
         .map_while(|i| cx.find(("overview.repository", i)).map(|row| (i, row)))
         .find(|(_, row)| row.label() == Some(name.as_str()))
         .expect("the Overview lists the repository");
-    assert!(
-        cx.find(("overview.pull", ix)).is_some(),
-        "the repository is behind"
-    );
+    for (id, title) in [
+        ("overview.pull", "Preview pull"),
+        ("overview.switch", "Switch branch"),
+        ("overview.log", "Open repository log"),
+    ] {
+        assert_eq!(label(cx, (id, ix)).as_deref(), Some(title));
+    }
     cx.activity(|s, cx| s.say("Fetched", false, cx));
     assert!(
         cx.find("status.message")
@@ -389,6 +392,7 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         ["clean", "conflict", "detached", "dirty", "gone", "local"]
             .map(|name| checkout_index(cx, name));
 
+    assert!(cx.find("overview.addFolder").is_none());
     assert_eq!(
         label(cx, "overview.clean").as_deref(),
         Some("Up to date · 1")
@@ -403,9 +407,12 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         Some("1 conflict")
     );
     assert!(cx.find(("overview.switch", conflict)).is_none());
+    let changed = cx.find(("overview.status", dirty)).unwrap();
+    assert_eq!(changed.label(), Some("1 file"));
+    let clean_cell = cx.find(("overview.status", detached)).unwrap();
     assert_eq!(
-        label(cx, ("overview.status", dirty)).as_deref(),
-        Some("1 changed file")
+        changed.bounds().size.height,
+        clean_cell.bounds().size.height
     );
     assert_eq!(
         label(cx, ("overview.sync", dirty)).as_deref(),

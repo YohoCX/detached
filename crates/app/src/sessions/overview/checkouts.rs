@@ -97,23 +97,19 @@ impl Overview {
         let compact = self.checkout_compact;
         let this = cx.weak_entity();
         let t = theme(cx);
-        let add_folder = if empty {
-            ui::primary_button("overview.addFolder", "Add a folder…", cx)
+        let action = if empty {
+            button(
+                ui::primary_button("overview.addFolder", "Add a folder…", cx),
+                "Add a folder",
+            )
+            .on_click(|_, _, cx| repos::add_folders(cx))
         } else {
-            ui::quiet_button("overview.addFolder", "Add a folder…", cx)
+            button(
+                ui::primary_button("overview.new", "New session…", cx),
+                "New session",
+            )
+            .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"))
         };
-        let new_session = ui::primary_button("overview.new", "New session…", cx);
-        let actions = div()
-            .flex()
-            .flex_wrap()
-            .gap(GAP / 2.)
-            .when(!empty, |d| {
-                d.child(
-                    button(new_session, "New session")
-                        .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new")),
-                )
-            })
-            .child(button(add_folder, "Add a folder").on_click(|_, _, cx| repos::add_folders(cx)));
         let mut summary = Vec::new();
         if rows.iter().all(|row| row.status().is_some()) {
             let statuses = rows.iter().filter_map(Checkout::status);
@@ -175,7 +171,7 @@ impl Overview {
                     .justify_between()
                     .gap(GAP)
                     .child(title)
-                    .child(actions),
+                    .child(action),
             )
             .when(empty, |d| {
                 let name = workspace.name(cx).unwrap_or("This workspace");
@@ -253,44 +249,46 @@ impl Overview {
         let pull_path = info.path.clone();
         let switch_path = info.path.clone();
         let log_path = info.path.clone();
-        let pull = ui::quiet_button(("overview.pull", ix), "Pull…", cx);
-        let switch = ui::quiet_button(("overview.switch", ix), "Switch…", cx);
-        let log = ui::icon_button(("overview.log", ix), Icon::Tree.size(text::HEADING), cx);
+        let action = |id, icon: Icon, title| {
+            ui::titled(
+                ui::icon_button((id, ix), icon.size(text::HEADING), cx),
+                title,
+            )
+            .test_support()
+        };
         let actions = div()
             .flex()
-            .flex_wrap()
             .items_center()
             .justify_end()
             .gap(GAP / 4.)
             .when(enabled && status.is_some_and(pullable), |d| {
                 d.child(
-                    button(pull, "Preview pull")
+                    action("overview.pull", Icon::Pull, "Preview pull")
                         .on_click(move |_, w, cx| preview_pull(&pull_path, w, cx)),
                 )
             })
             .when(enabled, |d| {
-                d.child(button(switch, "Switch branch").on_click(move |_, w, cx| {
-                    Workspace::global(cx).update(cx, |ws, cx| {
-                        ws.set_current(Some(switch_path.clone()), cx);
-                    });
-                    actions::dispatch(w, cx, "vcs.checkout");
-                }))
+                d.child(
+                    action("overview.switch", Icon::Branch, "Switch branch").on_click(
+                        move |_, w, cx| {
+                            Workspace::global(cx).update(cx, |ws, cx| {
+                                ws.set_current(Some(switch_path.clone()), cx);
+                            });
+                            actions::dispatch(w, cx, "vcs.checkout");
+                        },
+                    ),
+                )
             })
             .child(
-                ui::titled(log, "Open repository log")
-                    .test_support()
-                    .on_click(move |_, w, cx| {
+                action("overview.log", Icon::Tree, "Open repository log").on_click(
+                    move |_, w, cx| {
                         let doc = Doc::Log {
                             repo: log_path.clone(),
                         };
                         dock::open_doc(doc, true, w, cx)
-                    }),
+                    },
+                ),
             );
-        let icon = if changes.is_empty() {
-            Icon::Repo
-        } else {
-            disclosure(open)
-        };
         let name = ui::pressable(("overview.repository", ix))
             .test_support()
             .aria_label(info.name.clone())
@@ -313,13 +311,19 @@ impl Overview {
             .child(
                 div()
                     .flex()
+                    .flex_none()
+                    .w(text::HEADING)
                     .text_color(t.muted)
-                    .child(icon.size(text::HEADING)),
+                    .when(!changes.is_empty(), |d| {
+                        d.child(disclosure(open).size(text::HEADING))
+                    }),
             )
             .child(
                 div()
                     .min_w_0()
-                    .truncate()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_middle()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(info.name.clone()),
             );
@@ -441,7 +445,7 @@ fn columns(
         .child(column(1.4).child(repo))
         .child(column(1.).child(local))
         .child(column(1.1).child(upstream))
-        .child(div().flex_none().w(GAP * 20.).child(actions))
+        .child(div().flex_none().w(GAP * 9.).child(actions))
 }
 
 fn branch_label(s: &RepoStatus) -> String {
@@ -457,8 +461,8 @@ fn checkout_status(ix: usize, s: &RepoStatus, conflicts: usize, cx: &App) -> (Di
     let t = theme(cx);
     let changed = match s.changes.len() {
         0 => "Clean".into(),
-        1 => "1 changed file".into(),
-        n => format!("{n} changed files"),
+        1 => "1 file".into(),
+        n => format!("{n} files"),
     };
     let sync = match (s.upstream.as_deref(), s.upstream_gone, s.ahead, s.behind) {
         (None, _, _, _) => None,
@@ -473,11 +477,13 @@ fn checkout_status(ix: usize, s: &RepoStatus, conflicts: usize, cx: &App) -> (Di
     let upstream = s.upstream.clone().unwrap_or_else(|| "No upstream".into());
     let local = div()
         .child(
-            line(("overview.status", ix), changed).text_color(if s.changes.is_empty() {
-                t.muted
-            } else {
-                t.modified
-            }),
+            line(("overview.status", ix), changed)
+                .whitespace_nowrap()
+                .text_color(if s.changes.is_empty() {
+                    t.muted
+                } else {
+                    t.modified
+                }),
         )
         .when(conflicts > 0, |d| {
             let label = if conflicts == 1 {
