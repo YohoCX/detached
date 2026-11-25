@@ -850,10 +850,14 @@ impl ChatView {
             menu = menu.item(format!("Leave {g}"), join(None));
         }
         let me = self.me.clone();
-        menu.item_if(on, "Wake on messages", move |window, cx| {
-            inbox::set_wake(cx, &id, !wake);
-            me.update(cx, |this, cx| this.focus(window, cx)).ok();
-        })
+        menu.item_if(
+            on && chat.live(cx).is_some(),
+            "Wake on messages",
+            move |window, cx| {
+                inbox::set_wake(cx, &id, !wake);
+                me.update(cx, |this, cx| this.focus(window, cx)).ok();
+            },
+        )
         .checked(wake)
     }
 
@@ -1014,26 +1018,22 @@ impl ChatView {
     /// Tool calls in a row: one line saying what ran, open while one runs or when one failed.
     fn group(&self, first: usize, items: &[(At, &Item)], cx: &App) -> AnyElement {
         let t = theme(cx);
-        let tools: Vec<&Tool> = (items.iter())
-            .filter_map(|(_, it)| match it {
-                Item::Tool(t) => Some(t),
-                _ => None,
-            })
-            .collect();
-        let running = tools.iter().any(|t| ok(t).is_none());
-        let failed = tools.iter().any(|t| ok(t) == Some(false));
-        let Some(key) = tools.first().map(|t| t.id.clone()) else {
+        let Some((_, Item::Tool(tool))) = items.first() else {
             return div().into_any_element();
         };
-        let open = self.toggled.contains(&key) != (running || failed);
+        let key = tool.id.clone();
+        let mut status = ToolState::Done;
         let mut counts: Vec<(String, usize)> = vec![];
-        for t in &tools {
-            let name = t.kind.clone().unwrap_or_default();
+        for &(at, item) in items {
+            let Item::Tool(tool) = item else { continue };
+            status = status.max(self.tool_state(at, tool, cx));
+            let name = tool.kind.clone().unwrap_or_default();
             match counts.iter_mut().find(|(n, _)| *n == name) {
                 Some((_, c)) => *c += 1,
                 None => counts.push((name, 1)),
             }
         }
+        let open = self.toggled.contains(&key) != (status >= ToolState::Failed);
         let names = counts
             .iter()
             .map(|(n, c)| match c {
@@ -1043,21 +1043,11 @@ impl ChatView {
             .collect::<Vec<_>>()
             .join(", ");
         let summary = format!("{} actions · {names}", items.len());
-        let icon = match (running, failed) {
-            (true, _) => ui::spinner(t.accent).into_any_element(),
-            (_, true) => div()
-                .text_color(t.error)
-                .child(Icon::Close.size(px(12.)))
-                .into_any_element(),
-            _ => div()
-                .text_color(t.success)
-                .child(Icon::Check.size(px(12.)))
-                .into_any_element(),
-        };
         let header = div()
             .id(("chat.group", first))
             .test_support()
             .aria_label(SharedString::from(summary.clone()))
+            .aria_description(status.label())
             .flex()
             .items_center()
             .h(px(24.))
@@ -1080,7 +1070,7 @@ impl ChatView {
                     .ok();
                 }
             })
-            .child(icon)
+            .child(status.icon(cx))
             .child(div().min_w_0().truncate().child(summary))
             .child(match open {
                 true => Icon::Down.size(px(12.)).into_any_element(),
@@ -1109,6 +1099,16 @@ impl ChatView {
             .child(header)
             .children(lines)
             .into_any_element()
+    }
+
+    fn tool_state(&self, (k, i): At, tool: &Tool, cx: &App) -> ToolState {
+        let s = self.session.read(cx).sessions[k].read(cx);
+        match tool.status.as_deref() {
+            Some("completed") => ToolState::Done,
+            Some("failed") => ToolState::Failed,
+            _ if i >= s.history && s.state == State::Running => ToolState::Running,
+            _ => ToolState::Unknown,
+        }
     }
 
     fn row(
@@ -1218,20 +1218,8 @@ impl ChatView {
                 let (name, detail, output) = (kind(tool), title(tool), output(tool));
                 let file = self.file_of(&name, &detail, cx);
                 let detail = first_line(detail);
-                let state = ok(tool);
-                let icon = match state {
-                    None => ui::spinner(t.accent).into_any_element(),
-                    Some(true) => div()
-                        .text_color(t.success)
-                        .child(Icon::Check.size(px(12.)))
-                        .into_any_element(),
-                    Some(false) => div()
-                        .text_color(t.error)
-                        .child(Icon::Close.size(px(12.)))
-                        .into_any_element(),
-                };
-                let said = state.map_or("running", |ok| if ok { "ok" } else { "failed" });
-                let label = format!("{name} {detail} {said}");
+                let status = self.tool_state(at, tool, cx);
+                let label = format!("{name} {detail} {}", status.label());
                 let shown = self.outputs.contains(&tool.id);
                 let key = tool.id.clone();
                 let stats = tool.lines.map(|(add, del)| {
@@ -1243,7 +1231,7 @@ impl ChatView {
                         .child(div().text_color(t.success).child(format!("+{add}")))
                         .child(div().text_color(t.error).child(format!("−{del}")))
                 });
-                let head = line(label, icon, name, detail)
+                let head = line(label, status.icon(cx), name, detail)
                     .children(stats)
                     .when(!output.is_empty(), |d| {
                         d.cursor_pointer()
@@ -2241,12 +2229,36 @@ fn output(t: &Tool) -> String {
     t.output_text()
 }
 
-/// Whether a call went well; None while it runs.
-fn ok(t: &Tool) -> Option<bool> {
-    match t.status.as_deref() {
-        Some("completed") => Some(true),
-        Some("failed") => Some(false),
-        _ => None,
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ToolState {
+    Done,
+    Unknown,
+    Failed,
+    Running,
+}
+
+impl ToolState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Done => "ok",
+            Self::Unknown => "outcome unknown",
+            Self::Failed => "failed",
+            Self::Running => "running",
+        }
+    }
+
+    fn icon(self, cx: &App) -> AnyElement {
+        let t = theme(cx);
+        let (color, icon) = match self {
+            Self::Done => (t.success, Icon::Check),
+            Self::Unknown => (t.muted, Icon::Minus),
+            Self::Failed => (t.error, Icon::Close),
+            Self::Running => return ui::spinner(t.accent).into_any_element(),
+        };
+        div()
+            .text_color(color)
+            .child(icon.size(text::SMALL))
+            .into_any_element()
     }
 }
 

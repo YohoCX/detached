@@ -402,11 +402,15 @@ fn a_chat_after_a_switch_snapshots_its_own_repos_and_its_proc_and_watch_find_the
     let path = other.display().to_string();
     f.core.add_folder(Some(id.clone()), path).unwrap();
     let s = open(&f, Kind::Chat, cx);
+    let passive = cx.update(|cx| Session::past(f.spec(Kind::Chat), "missing".into(), cx));
     let workspace = cx.read(Workspace::global);
     workspace.update(cx, |w, cx| w.switch(id.clone(), cx));
     wait_until(cx, |cx| {
         Workspace::get(cx).id() == Some(id.as_str()) && !crate::invalidate::rescanning(cx)
     });
+    wait_until(cx, |cx| !passive.read(cx).items.is_empty());
+    drop(passive);
+    cx.update(|_| {});
     cx.read(|cx| {
         let w = Workspace::get(cx);
         assert!(w.repos().iter().all(|r| r.path != f.repo));
@@ -447,6 +451,65 @@ fn a_chat_after_a_switch_snapshots_its_own_repos_and_its_proc_and_watch_find_the
     // Its release, and so the workspace's, runs on the next flush of effects.
     cx.update(|_| {});
     assert!(cx.read(|cx| Workspace::get(cx).repo(&f.repo).is_none()));
+}
+
+#[test]
+fn a_tool_heavy_transcript_indexes_calls_and_updates_them_in_place() {
+    let (mut items, mut whole, mut tools) = (vec![], 0, HashMap::new());
+    let count = 10_000;
+    for i in 0..count {
+        let call = Tool {
+            id: i.to_string(),
+            title: Some("lookup".into()),
+            ..Tool::default()
+        };
+        record(
+            &mut items,
+            &mut whole,
+            &mut tools,
+            Update::Tool(Box::new(call)),
+        );
+    }
+    for i in (0..count).rev() {
+        let id = i.to_string();
+        assert_eq!(tools[&id], i);
+        let result = Tool {
+            id,
+            output: Some(json!(i)),
+            ..Tool::default()
+        };
+        record(
+            &mut items,
+            &mut whole,
+            &mut tools,
+            Update::Tool(Box::new(result)),
+        );
+    }
+    assert_eq!(items.len(), count);
+    for (i, item) in items.iter().enumerate() {
+        assert!(
+            matches!(item, Item::Tool(t) if t.title.as_deref() == Some("lookup") && t.output == Some(json!(i)))
+        );
+    }
+}
+
+#[gpui::test]
+fn a_start_that_ends_during_replay_keeps_only_its_diagnostics(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let spec = Spec::new(&CLAUDE, ".", Kind::Chat);
+        let who = Identity::of(spec.kind, &spec.repo);
+        let s = cx.new(|_| Session::new(spec, Some("past".into()), who, None));
+        s.update(cx, |s, cx| {
+            s.prompt("retry me".into(), cx);
+            s.version = Some("test".into());
+            s.update(Update::User("earlier".into()));
+            s.update(Update::Text("replayed".into()));
+            s.fail("agent exited".into());
+            s.close(End::Crashed("agent exited".into()), cx);
+            assert_eq!(s.items, [Item::Error("agent exited".into())]);
+            assert_eq!(s.returned.as_deref(), Some("retry me"));
+        });
+    });
 }
 
 #[gpui::test]
