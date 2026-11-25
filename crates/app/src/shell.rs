@@ -13,6 +13,7 @@ use gpui_kit::{
 };
 
 use crate::dock;
+use crate::files::{ExplorerMode, explorer_mode};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::ui::grip::{Pane, Size};
@@ -197,16 +198,17 @@ pub(crate) fn side_rail(id: &'static str, cx: &App) -> ObservedElement<Stateful<
 }
 
 pub(crate) fn explorer_fold_button(cx: &App) -> impl IntoElement + use<> {
-    let (icon, title, action) = if crate::files::showing_changes(cx) {
-        (Icon::Changes, "Show changes", "panel.changes")
-    } else {
-        (Icon::Folder, "Show files", "panel.project")
+    let (icon, title, action) = match explorer_mode(cx) {
+        ExplorerMode::Files => (Icon::Folder, "Show files", Some("panel.project")),
+        ExplorerMode::Changes => (Icon::Changes, "Show changes", Some("panel.changes")),
+        ExplorerMode::Chats => (Icon::Chat, "Show chats", None),
     };
-    ui::titled_action(
-        ui::icon_button("explorer.fold", icon.size(rail::ICON), cx),
-        title,
-        action,
-    )
+    let button = ui::icon_button("explorer.fold", icon.size(rail::ICON), cx);
+    if let Some(action) = action {
+        ui::titled_action(button, title, action)
+    } else {
+        ui::titled(button, title)
+    }
     .test_support()
     .on_click(|_, w, cx| toggle_side(Side::Explorer, w, cx))
 }
