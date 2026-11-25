@@ -48,13 +48,17 @@ fn in_list(cx: &mut VisualTestContext, id: &str) -> bool {
         .is_some_and(|e| e.selected() == Some(true))
 }
 
-fn open_archive_menu(cx: &mut VisualTestContext) {
+fn session_menu(cx: &mut VisualTestContext, label: &str) {
     cx.click("session.more");
     let row = (0usize..)
         .map_while(|i| cx.find(("menu.item", i)))
-        .position(|item| item.label() == Some("Archive session…"))
-        .expect("archive menu item");
+        .position(|item| item.label() == Some(label))
+        .expect("menu item");
     cx.click(("menu.item", row));
+}
+
+fn open_archive_menu(cx: &mut VisualTestContext) {
+    session_menu(cx, "Archive session…");
 }
 
 fn root(cx: &mut VisualTestContext, i: usize) -> Option<String> {
@@ -913,7 +917,7 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
         cx.workspace(|w, _| w.session_name() == "Banner copy")
     });
 
-    app.click("sessions.addRepo");
+    session_menu(&mut app, "Add repository…");
     wait_until(&mut app, |cx| {
         cx.find(("sessions.repository", 0usize))
             .is_some_and(|e| e.visible())
@@ -1540,7 +1544,7 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_the_rail(
     let archive = bounds(app, "sessions.archive");
     assert!(bounds(app, &members[10]).bottom() <= archive.top());
     assert!(bounds(app, "sessions").right() <= bounds(app, "session.explorer").left());
-    assert!(bounds(app, "session.explorer").right() <= bounds(app, "session.header").left());
+    assert!(bounds(app, "session.explorer").right() <= bounds(app, "shell.center").left());
     assert!(app.find("session.overview").unwrap().visible());
 
     app.update(|w, cx| {

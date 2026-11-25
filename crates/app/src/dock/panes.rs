@@ -39,6 +39,10 @@ pub(super) fn count(area: &DockArea) -> usize {
     groups(area).len()
 }
 
+pub(super) fn is_first(area: &DockArea, node: NodeId) -> bool {
+    groups(area).first().is_some_and(|g| g.0 == node)
+}
+
 fn groups(area: &DockArea) -> Vec<(NodeId, Vec<PanelId>, usize)> {
     let mut out = Vec::new();
     tree(area).walk(&mut |n| {

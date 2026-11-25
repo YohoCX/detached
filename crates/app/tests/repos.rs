@@ -729,7 +729,7 @@ fn a_rename_commits_on_blur_a_click_outside_or_another_rename_and_a_taken_name_i
     let main = workspace_row(cx, "Main");
     click_in(cx, &main, "rename");
     cx.input("Home");
-    cx.click("session.header");
+    cx.click("shell.center");
     assert!(cx.find("workspaces.popup").is_none());
     wait_until(cx, |cx| label(cx, "workspaces") == "Home");
 
