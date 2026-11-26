@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
-    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Mode, Model, Part,
-    Piece, Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
+    self, Account, Backend, Cause, Chip, Config, ContextPart, Event, Events, Exit, Failure, Limit,
+    Mode, Model, Part, Piece, Prompt, Question, Setting, SlashCommand, Spec, StopReason, Tool,
+    Turn, TurnConfig, Update,
 };
 use detached_core::chat_index;
 use detached_core::chat_settings::Preset;
@@ -103,6 +104,8 @@ pub enum Back {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     User(String),
+    /// What the user message before it carried.
+    Attached(Vec<Chip>),
     Text(String),
     Thought(String),
     Tool(Tool),
@@ -174,7 +177,9 @@ pub struct Session {
     /// The tasks running now.
     pub tasks: Vec<backend::Task>,
     /// The context's parts, as last reported.
-    pub parts: Vec<Part>,
+    pub parts: Vec<ContextPart>,
+    /// Whether the agent takes images in a prompt.
+    pub images: bool,
     /// The plan's limits; None until reported.
     pub limits: Option<Vec<Limit>>,
     /// What this session's agent turned out to lack.
@@ -183,6 +188,8 @@ pub struct Session {
     pub history: usize,
     /// A prompt given while the session starts, sent once it has.
     pub queued: Option<String>,
+    /// The attachments of `queued`, `unsent` or `returned`, which come back with their text.
+    pub kept: Vec<Part>,
     /// A prompt to send in the next session.
     pub unsent: Option<String>,
     /// A prompt to put back in the composer.
@@ -518,6 +525,8 @@ impl Session {
             lacks: vec![],
             history: 0,
             queued: None,
+            kept: vec![],
+            images: false,
             unsent: None,
             returned: None,
             refused: false,
@@ -673,7 +682,8 @@ impl Session {
             let _ = self.set(setting);
         }
         if let Some(text) = self.queued.take() {
-            self.prompt(text, cx);
+            let parts = std::mem::take(&mut self.kept);
+            self.prompt_parts(Prompt { text, parts }, cx);
         }
         if self.wake_due {
             self.wake(cx);
@@ -705,8 +715,13 @@ impl Session {
     /// Starts a turn: the trust check and the worktrees' snapshots first, then the prompt. While the
     /// session starts, the prompt waits for it.
     pub fn prompt(&mut self, text: String, cx: &mut Context<Self>) {
+        self.prompt_parts(text.into(), cx);
+    }
+
+    /// `prompt` with attachments.
+    pub fn prompt_parts(&mut self, prompt: Prompt, cx: &mut Context<Self>) {
         if self.state == State::Starting && self.queued.is_none() {
-            self.queued = Some(text);
+            (self.queued, self.kept) = (Some(prompt.text), prompt.parts);
             return cx.notify();
         }
         if self.open.is_none() || self.state != State::Idle {
@@ -715,8 +730,11 @@ impl Session {
         if let Some(id) = &self.id {
             crate::inbox::user_turn(cx, id);
         }
-        self.items.push(Item::User(text.clone()));
-        self.begin(text, cx);
+        self.items.push(Item::User(prompt.text.clone()));
+        if !prompt.parts.is_empty() {
+            self.items.push(Item::Attached(prompt.chips()));
+        }
+        self.begin(prompt, cx);
     }
 
     /// New messages: an idle session takes a woken turn in the asking mode, a busy one once idle.
@@ -763,7 +781,7 @@ impl Session {
         }
     }
 
-    fn begin(&mut self, text: String, cx: &mut Context<Self>) {
+    fn begin(&mut self, prompt: Prompt, cx: &mut Context<Self>) {
         (self.state, self.cancelled, self.done) = (State::Running, false, false);
         let core = crate::core(cx).clone();
         let (repo, trust) = (self.spec.repo.clone(), self.trust.clone());
@@ -779,7 +797,7 @@ impl Session {
         });
         self.task(cx, async move |this, cx| {
             let ready = ready.await;
-            this.update(cx, |s, cx| s.send(ready, text, cx)).ok();
+            this.update(cx, |s, cx| s.send(ready, prompt, cx)).ok();
         });
         cx.notify();
     }
@@ -788,25 +806,26 @@ impl Session {
     fn send(
         &mut self,
         ready: Option<Vec<(Result<String>, String)>>,
-        text: String,
+        prompt: Prompt,
         cx: &mut Context<Self>,
     ) {
         let end = match (ready, self.ending.take()) {
             (None, _) => Some(End::Trust),
             (Some(_), Some(end)) => Some(end),
-            (Some(trees), None) => return self.prompted(trees, text, cx),
+            (Some(trees), None) => return self.prompted(trees, prompt, cx),
         };
         if !self.woken {
             // A note may have come after it, as a trust's while the snapshots ran.
             if let Some(i) = self
                 .items
                 .iter()
-                .rposition(|i| matches!(i, Item::User(t) if *t == text))
+                .rposition(|i| matches!(i, Item::User(t) if *t == prompt.text))
             {
-                self.items.remove(i);
+                let n = 1 + usize::from(matches!(self.items.get(i + 1), Some(Item::Attached(_))));
+                self.items.drain(i..i + n);
                 self.reindex_tools(i);
             }
-            self.unsent = Some(text);
+            (self.unsent, self.kept) = (Some(prompt.text), prompt.parts);
         }
         self.close(end.unwrap_or(End::Closed), cx);
     }
@@ -814,13 +833,13 @@ impl Session {
     fn prompted(
         &mut self,
         trees: Vec<(Result<String>, String)>,
-        text: String,
+        prompt: Prompt,
         cx: &mut Context<Self>,
     ) {
         let Some(o) = self.open.as_ref().filter(|_| self.state == State::Running) else {
             return;
         };
-        let sent = o.prompt(&text);
+        let sent = o.prompt(&prompt);
         if sent.is_ok() && self.cancelled {
             o.cancel();
         }
@@ -1017,7 +1036,7 @@ impl Session {
         match e {
             Event::Opened(o) => {
                 self.id = Some(o.id);
-                self.version = Some(o.version);
+                (self.version, self.images) = (Some(o.version), o.images);
                 self.config = o.config;
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
                 let (core, id) = (crate::core(cx).clone(), self.spec.provider.id);
@@ -1096,6 +1115,7 @@ impl Session {
     pub(crate) fn update(&mut self, u: Update) {
         match u {
             Update::User(_)
+            | Update::Attached(_)
             | Update::Text(_)
             | Update::Thought(_)
             | Update::Break
@@ -1375,6 +1395,7 @@ fn record(
         | (Update::Text(t), Some(Item::Text(was)))
         | (Update::Thought(t), Some(Item::Thought(was))) => was.push_str(&t),
         (Update::User(t), _) => items.push(Item::User(t)),
+        (Update::Attached(c), _) => items.push(Item::Attached(c)),
         (Update::Text(t), _) => items.push(Item::Text(t)),
         (Update::Thought(t), _) => items.push(Item::Thought(t)),
         (Update::Break, _) => *whole = items.len(),

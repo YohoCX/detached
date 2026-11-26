@@ -1382,6 +1382,15 @@ impl ChatView {
                 .text_color(t.error)
                 .child(text.clone())
                 .into_any_element(),
+            Item::Attached(chips) => {
+                let names: Vec<_> = chips.iter().map(|c| c.name.as_str()).collect();
+                let text = format!("Attached: {}", names.join(", "));
+                self.row(i, text.clone())
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .child(text)
+                    .into_any_element()
+            }
             Item::Woken => self
                 .row(i, "Woken by new messages".into())
                 .text_size(text::SMALL)

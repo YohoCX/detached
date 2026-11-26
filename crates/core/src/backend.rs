@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -184,14 +186,116 @@ pub enum Probe {
 
 /// A session open on its backend; dropped, it closes there and `Closed` follows.
 pub trait Session: Send {
-    /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.
-    fn prompt(&self, text: &str) -> Result<()>;
+    /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates. An image the
+    /// agent takes none of is refused.
+    fn prompt(&self, prompt: &Prompt) -> Result<()>;
     /// Ends the running turn and its foreground command.
     fn cancel(&self);
     /// Switches the model, effort or mode; a model the agent does not offer is refused.
     fn set(&self, setting: Setting) -> Result<()>;
     /// Stops a running task.
     fn stop_task(&self, id: &str);
+}
+
+/// A prompt: its text and what goes with it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Prompt {
+    pub text: String,
+    pub parts: Vec<Part>,
+}
+
+impl From<&str> for Prompt {
+    fn from(text: &str) -> Self {
+        text.to_string().into()
+    }
+}
+
+impl From<String> for Prompt {
+    fn from(text: String) -> Self {
+        Prompt {
+            text,
+            parts: vec![],
+        }
+    }
+}
+
+impl Prompt {
+    pub fn chips(&self) -> Vec<Chip> {
+        self.parts.iter().map(Part::chip).collect()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Part {
+    Image {
+        mime: String,
+        data: Vec<u8>,
+    },
+    /// A file by its path: with its text when it goes in whole, without when it goes as a link.
+    File {
+        path: PathBuf,
+        text: Option<String>,
+    },
+}
+
+/// What a prompt part leaves in the transcript: a name and how it went.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chip {
+    pub name: String,
+    pub kind: ChipKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ChipKind {
+    Image,
+    /// A file whose text went in.
+    Text,
+    /// A file that went by its path.
+    Link,
+}
+
+pub fn base64(data: &[u8]) -> String {
+    STANDARD.encode(data)
+}
+
+impl Chip {
+    pub fn image(mime: &str) -> Chip {
+        Chip {
+            name: format!("image.{}", mime.rsplit('/').next().unwrap_or_default()),
+            kind: ChipKind::Image,
+        }
+    }
+}
+
+impl Part {
+    pub fn chip(&self) -> Chip {
+        match self {
+            Part::Image { mime, .. } => Chip::image(mime),
+            Part::File { path, text } => Chip {
+                name: path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                ),
+                kind: if text.is_some() {
+                    ChipKind::Text
+                } else {
+                    ChipKind::Link
+                },
+            },
+        }
+    }
+
+    /// What goes to an agent that has no block for the part; an image has none.
+    pub fn as_text(&self) -> Option<String> {
+        let Part::File { path, text } = self else {
+            return None;
+        };
+        let path = path.display();
+        Some(match text {
+            Some(t) => format!("File {path}:\n```\n{t}\n```"),
+            None => format!("The file {path} is attached by its path; read it when needed."),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -310,6 +414,8 @@ pub struct Opened {
     pub account: Option<Account>,
     /// A resume whose history could not be read: it goes on without it.
     pub unread: bool,
+    /// Whether the agent takes images in a prompt.
+    pub images: bool,
 }
 
 /// Who the session runs as and what it draws from: "Claude Max", "Anthropic API", "Amazon Bedrock".
@@ -331,6 +437,8 @@ pub struct Config {
 pub enum Update {
     /// User text, text and a thought come in chunks, each going on with the last item of its kind.
     User(String),
+    /// What the last user message carried, as chips.
+    Attached(Vec<Chip>),
     Text(String),
     Thought(String),
     /// A message ended: the next chunk starts a new item.
@@ -343,7 +451,7 @@ pub enum Update {
         used: u64,
         size: u64,
         cost: Option<f64>,
-        parts: Vec<Part>,
+        parts: Vec<ContextPart>,
     },
     Config(Vec<Config>),
     Mode(String),
@@ -508,7 +616,7 @@ pub struct Task {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Part {
+pub struct ContextPart {
     pub name: String,
     pub tokens: u64,
 }

@@ -92,7 +92,7 @@ fn turn(
     let open = acp.start(&sb.state, spec, None, Box::new(move |e| _ = tx.send(e)));
     let open = open.unwrap();
     let mut seen = Seen::default();
-    open.prompt(prompt).unwrap();
+    open.prompt(&prompt.into()).unwrap();
     while seen.end.is_none() {
         match rx
             .recv_timeout(Duration::from_secs(180))

@@ -73,7 +73,7 @@ fn until(rx: &Receiver<Event>, end: impl Fn(&str, &Event) -> bool) -> (String, V
 }
 
 fn turn(s: &Open, prompt: &str) -> (String, Vec<Event>) {
-    s.0.prompt(prompt).unwrap();
+    s.0.prompt(&prompt.into()).unwrap();
     until(&s.1, |_, e| matches!(e, Event::Ended(..)))
 }
 
@@ -118,7 +118,7 @@ fn a_cli_gone_mid_turn_ends_its_own_session_and_no_other() {
         open(&run, &chat(&run)).unwrap(),
         open(&run, &chat(&run)).unwrap(),
     );
-    a.0.prompt("die").unwrap();
+    a.0.prompt(&"die".into()).unwrap();
     let (_, events) = until(&a.1, |_, e| matches!(e, Event::Exited(_) | Event::Closed));
     let Some(Event::Exited(x)) = events.last() else {
         panic!("not an exit");
@@ -228,7 +228,7 @@ fn busy(run: &Run, step: &str) -> (Open, String, u32) {
     let Ok(Event::Opened(o)) = s.1.recv() else {
         panic!("not opened");
     };
-    s.0.prompt(&format!("{step};hang")).unwrap();
+    s.0.prompt(&format!("{step};hang").into()).unwrap();
     let two = |said: &str, _: &Event| said.split_whitespace().count() == 2 && said.ends_with(' ');
     let (said, _) = until(&s.1, two);
     let pid = said.trim().strip_prefix("child ").unwrap().parse().unwrap();
@@ -679,4 +679,53 @@ fn the_probe_passes_only_when_its_write_is_denied_and_reaches_its_responder_what
     assert_eq!(fake("works"), Probe::Passed);
     assert!(matches!(fake("off"), Probe::Failed(e) if e.contains("wrote")));
     assert!(matches!(fake("unavailable"), Probe::Failed(_)));
+}
+
+#[test]
+fn a_prompt_with_parts_is_a_block_list_and_one_without_is_a_string() {
+    assert_eq!(content(&"hi".into()), json!("hi"));
+    let file = |text: Option<&str>| Part::File {
+        path: "/a/b.txt".into(),
+        text: text.map(String::from),
+    };
+    let image = Part::Image {
+        mime: "image/png".into(),
+        data: vec![1, 2, 3],
+    };
+    let prompt = Prompt {
+        text: "look".into(),
+        parts: vec![image, file(Some("x")), file(None)],
+    };
+    let blocks = content(&prompt);
+    assert_eq!(blocks[0], json!({"type": "text", "text": "look"}));
+    let source = json!({"type": "base64", "media_type": "image/png", "data": "AQID"});
+    assert_eq!(blocks[1], json!({"type": "image", "source": source}));
+    assert!(blocks[2]["text"].as_str().unwrap().contains("```\nx\n```"));
+    assert!(blocks[3]["text"].as_str().unwrap().contains("/a/b.txt"));
+    let bare = Prompt {
+        text: String::new(),
+        parts: vec![file(None)],
+    };
+    assert_eq!(content(&bare).as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn the_cli_gets_a_prompt_s_parts_as_content_blocks() {
+    let run = boot();
+    let s = open(&run, &chat(&run)).unwrap();
+    let image = Part::Image {
+        mime: "image/png".into(),
+        data: vec![1, 2, 3],
+    };
+    let file = Part::File {
+        path: "/a/b.txt".into(),
+        text: Some("x".into()),
+    };
+    let prompt = Prompt {
+        text: "parts".into(),
+        parts: vec![image, file],
+    };
+    s.0.prompt(&prompt).unwrap();
+    let (said, _) = until(&s.1, |_, e| matches!(e, Event::Ended(..)));
+    assert_eq!(said, "text,image:image/png,text");
 }

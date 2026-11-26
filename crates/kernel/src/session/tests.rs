@@ -513,6 +513,29 @@ fn a_start_that_ends_during_replay_keeps_only_its_diagnostics(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn a_queued_prompt_comes_back_with_its_attachments(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let spec = Spec::new(&CLAUDE, ".", Kind::Chat);
+        let who = Identity::of(spec.kind, &spec.repo);
+        let s = cx.new(|_| Session::new(spec, Some("past".into()), who, None));
+        s.update(cx, |s, cx| {
+            let file = Part::File {
+                path: "a.txt".into(),
+                text: None,
+            };
+            let prompt = Prompt {
+                text: "look".into(),
+                parts: vec![file.clone()],
+            };
+            s.prompt_parts(prompt, cx);
+            s.cancel();
+            assert_eq!(s.returned.as_deref(), Some("look"));
+            assert_eq!(s.kept, [file]);
+        });
+    });
+}
+
+#[gpui::test]
 fn chunks_go_on_with_their_message_and_a_break_starts_the_next(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);

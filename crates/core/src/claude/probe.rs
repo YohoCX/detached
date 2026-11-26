@@ -56,7 +56,7 @@ pub(super) fn run(core: &AppState, wsl: Option<&str>) -> Result<Probe> {
     let (tx, rx) = mpsc::channel();
     let live = start_in(core, &spec, None, Box::new(move |e| _ = tx.send(e)), vars)?;
     // The responder answers whatever the prompt says.
-    live.prompt("probe")?;
+    live.prompt(&"probe".into())?;
     let until = Instant::now() + LIMIT;
     let said = loop {
         match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {

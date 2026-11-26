@@ -19,8 +19,9 @@ use detached_core::adapters::{
     self, ANTIGRAVITY, BLOCK, CODEX, Cli, HostToolMatch, Launch, Provider, RepoTrust,
 };
 use detached_core::backend::{
-    self, Account, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Mode, Model, Opened,
-    Past, Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
+    self, Account, Answer, Ask, Backend, Chip, ChipKind, Config, Events, Exit, Failure, Kind, Mode,
+    Model, Opened, Part, Past, Prompt, Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn,
+    TurnConfig, Update,
 };
 use detached_core::chat_index;
 use detached_core::error::{Error, Result};
@@ -504,7 +505,7 @@ impl Live {
                         break;
                     }
                 }
-                Some(Request::Prompt(text)) => self.adapter.prompt(id, &text, state.snapshot())?,
+                Some(Request::Prompt(p)) => self.adapter.prompt(id, &p, state.snapshot())?,
                 None => break,
             }
         }
@@ -538,7 +539,7 @@ impl SessionConfig {
 
 enum Request {
     Set(String, String),
-    Prompt(String),
+    Prompt(Prompt),
 }
 
 /// The adapter's events, each to its session's stream.
@@ -730,6 +731,12 @@ impl Demux {
     }
 }
 
+fn uri(path: &Path) -> String {
+    let p = path.to_string_lossy().replace('\\', "/");
+    let p = p.replace('%', "%25").replace(' ', "%20");
+    format!("file://{}{p}", if p.starts_with('/') { "" } else { "/" })
+}
+
 fn pin_full(options: &mut [Config]) {
     if let Some(mode) = options.iter_mut().find(|c| c.id == "mode") {
         mode.value = Mode::Full.as_str().into();
@@ -769,13 +776,14 @@ struct Open {
 }
 
 impl backend::Session for Open {
-    fn prompt(&self, text: &str) -> Result<()> {
+    fn prompt(&self, prompt: &Prompt) -> Result<()> {
+        self.live.adapter.blocks(prompt)?;
         let mut demux = self.live.demux.lock().unwrap();
         let state = demux
             .configs
             .get_mut(&self.id)
             .ok_or_else(|| Error::Other("The session is closing".into()))?;
-        state.queue.push_back(Request::Prompt(text.into()));
+        state.queue.push_back(Request::Prompt(prompt.clone()));
         self.live.dispatch(&self.id, &mut demux)
     }
 
@@ -908,6 +916,7 @@ struct Adapter {
     provider: &'static Provider,
     /// What `initialize` said.
     version: String,
+    prompts: PromptCapabilities,
     #[cfg(test)]
     pid: u32,
     on_event: Arc<dyn Fn(Event) + Send + Sync>,
@@ -1047,6 +1056,7 @@ impl Adapter {
             cx,
             provider,
             version: String::new(),
+            prompts: PromptCapabilities::default(),
             #[cfg(test)]
             pid,
             on_event,
@@ -1058,6 +1068,7 @@ impl Adapter {
         let init = adapter.call(InitializeRequest::new(ProtocolVersion::V1));
         let init = init.map_err(|e| fail(e.to_string()))?;
         adapter.version = init.agent_info.map(|a| a.version).unwrap_or_default();
+        adapter.prompts = init.agent_capabilities.prompt_capabilities;
         Ok(adapter)
     }
 
@@ -1153,6 +1164,7 @@ impl Adapter {
             models,
             config,
             account: account(meta),
+            images: self.prompts.image,
             ..Opened::default()
         };
         (opened, wire_ids)
@@ -1185,10 +1197,43 @@ impl Adapter {
             .map_err(|e| Error::Other(e.to_string()))
     }
 
+    /// The prompt's blocks: what the agent has no block for goes as text, and an image it takes
+    /// none of is refused.
+    fn blocks(&self, prompt: &Prompt) -> Result<Vec<ContentBlock>> {
+        let caps = &self.prompts;
+        let text = |t: &str| ContentBlock::Text(TextContent::new(t));
+        let mut blocks = vec![text(&prompt.text)];
+        blocks.retain(|_| !prompt.text.is_empty() || prompt.parts.is_empty());
+        for part in &prompt.parts {
+            blocks.push(match part {
+                Part::Image { .. } if !caps.image => {
+                    return Err(Error::Other("This agent takes no images.".into()));
+                }
+                Part::Image { mime, data } => {
+                    ContentBlock::Image(ImageContent::new(backend::base64(data), mime))
+                }
+                Part::File {
+                    path,
+                    text: Some(t),
+                } if caps.embedded_context => {
+                    let text = TextResourceContents::new(t, uri(path));
+                    let text = EmbeddedResourceResource::TextResourceContents(text);
+                    ContentBlock::Resource(EmbeddedResource::new(text))
+                }
+                Part::File { path, text: None } => {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    ContentBlock::ResourceLink(ResourceLink::new(name, uri(path)))
+                }
+                file => text(&file.as_text().unwrap_or_default()),
+            });
+        }
+        Ok(blocks)
+    }
+
     /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.
-    fn prompt(&self, session: &str, text: &str, config: TurnConfig) -> Result<()> {
+    fn prompt(&self, session: &str, prompt: &Prompt, config: TurnConfig) -> Result<()> {
         let id = session.to_string();
-        let blocks = vec![ContentBlock::Text(TextContent::new(text))];
+        let blocks = self.blocks(prompt)?;
         let ended = self.on_event.clone();
         self.cx
             .send_request(PromptRequest::new(session.to_string(), blocks))
@@ -1409,7 +1454,15 @@ fn text(c: ContentChunk) -> Option<String> {
 
 fn update(provider: &Provider, u: SessionUpdate) -> Option<Update> {
     Some(match u {
-        SessionUpdate::UserMessageChunk(c) => Update::User(text(c)?),
+        SessionUpdate::UserMessageChunk(c) => match c.content {
+            ContentBlock::Text(t) => Update::User(t.text),
+            ContentBlock::Image(i) => Update::Attached(vec![Chip::image(&i.mime_type)]),
+            ContentBlock::ResourceLink(l) => Update::Attached(vec![Chip {
+                name: l.name,
+                kind: ChipKind::Link,
+            }]),
+            _ => return None,
+        },
         SessionUpdate::AgentMessageChunk(c) => Update::Text(text(c)?),
         SessionUpdate::AgentThoughtChunk(c) => Update::Thought(text(c)?),
         SessionUpdate::ToolCall(t) => {

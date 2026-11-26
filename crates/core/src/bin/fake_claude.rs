@@ -15,6 +15,8 @@
 //! - `env [<text>]` says the names in its env, of the values with the text, `argv` its arguments, `model` its model and mode;
 //!   `initialize` lists the skills it loads among the commands, as the CLI does, and `fake.json`'s
 //!   `commands` by name;
+//! - `parts` says the kinds of the prompt's content blocks: `text`, `image:<mime>`, comma separated,
+//!   empty for a plain string;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `config <path> <text>` writes the file and reports it as `ConfigChange` where the CLI does;
 //! - `wait <name>` waits for `$CLAUDE_CONFIG_DIR/<name>`;
@@ -213,10 +215,25 @@ fn main() {
                 if let Some(ack) = effort_ack.take() {
                     send(&out, ack);
                 }
-                let text = v["message"]["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
+                let content = v["message"]["content"].clone();
+                let blocks = content.as_array().cloned().unwrap_or_default();
+                let text = match content.as_str() {
+                    Some(t) => t.to_string(),
+                    None => (blocks.iter())
+                        .filter_map(|b| b["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                let kinds: Vec<String> = blocks
+                    .iter()
+                    .map(|b| match b["type"].as_str().unwrap_or_default() {
+                        "image" => format!(
+                            "image:{}",
+                            b["source"]["media_type"].as_str().unwrap_or_default()
+                        ),
+                        kind => kind.into(),
+                    })
+                    .collect();
                 let (cancel, cancelled) = mpsc::channel();
                 let (answer, answers) = mpsc::channel();
                 let (out, shared) = (out.clone(), shared.clone());
@@ -227,6 +244,8 @@ fn main() {
                         cancelled,
                         answers,
                         said: Mutex::new(String::new()),
+                        content,
+                        kinds: kinds.join(","),
                     };
                     t.run(&text);
                 });
@@ -491,6 +510,8 @@ struct Turn<'a> {
     cancelled: Receiver<()>,
     answers: Receiver<Value>,
     said: Mutex<String>,
+    content: Value,
+    kinds: String,
 }
 
 impl Turn<'_> {
@@ -513,7 +534,7 @@ impl Turn<'_> {
             })
             .or_else(|| script("fake-resume: ", &first()))
             .unwrap_or_else(|| text.to_string());
-        self.transcript("user", &json!({"role": "user", "content": text}));
+        self.transcript("user", &json!({"role": "user", "content": self.content}));
         let s = self.shared.lock().unwrap();
         let init = json!({"type": "system", "subtype": "init", "session_id": s.id,
             "model": s.model, "permissionMode": s.mode});
@@ -873,6 +894,7 @@ impl Turn<'_> {
                 };
                 self.say(&format!("project settings {on}"));
             }
+            "parts" => self.say(&self.kinds),
             "effort" => {
                 let effort = self.shared.lock().unwrap().effort.clone();
                 self.say(&format!("effort {effort}"));

@@ -280,3 +280,14 @@ fn a_distro_s_listing_reads_as_the_folder_does_past_a_nul_in_a_title() {
         (1_700_000_000_000, &here[0].title, &here[0].tag)
     );
 }
+
+#[test]
+fn a_user_image_comes_back_as_a_chip_before_the_text_it_came_with() {
+    let image = json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}});
+    let l =
+        json!({"type": "user", "message": {"content": [image, {"type": "text", "text": "look"}]}});
+    let mut out = vec![];
+    updates(&l, &mut HashMap::new(), &mut out, false);
+    let chip = Update::Attached(vec![crate::backend::Chip::image("image/png")]);
+    assert_eq!(out, [chip, Update::User("look".into())]);
+}
