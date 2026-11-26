@@ -1846,6 +1846,7 @@ impl ChatView {
         };
         let asking = questions.is_empty();
         let council = tool.kind.as_deref() == Some(launch::KIND);
+        let blocked = tool.input.as_ref().and_then(|i| i["blocked"].as_bool()) == Some(true);
         let state = match (council, answer) {
             (true, Answer::Once) => "started",
             (true, Answer::Always) => "started; agents start a Council without asking from now on",
@@ -1968,13 +1969,30 @@ impl ChatView {
         let buttons = open.then(|| {
             let b = div().flex().gap(px(8.));
             match asking {
+                true if council && blocked => b.child(button(
+                    "chat.council.decline",
+                    "Decline",
+                    false,
+                    Answer::Rejected,
+                )),
                 true if council => {
                     let session = self.session.clone();
                     let always = ui::button(("chat.council.always", i), "Always", cx)
                         .test_support()
                         .on_click(move |_, _, cx| {
-                            kernel::agents::set_council(cx, CouncilStart::Free).detach();
-                            session.update(cx, |s, cx| s.answer(at, Answer::Always, cx))
+                            let (session, saved) = (
+                                session.clone(),
+                                kernel::agents::set_council(cx, CouncilStart::Free),
+                            );
+                            cx.spawn(async move |cx| {
+                                let a = if saved.await {
+                                    Answer::Always
+                                } else {
+                                    Answer::Once
+                                };
+                                session.update(cx, |s, cx| s.answer(at, a, cx)).ok();
+                            })
+                            .detach();
                         });
                     b.child(button("chat.council.start", "Start", true, Answer::Once))
                         .child(always)
@@ -2694,20 +2712,32 @@ impl ToolState {
     }
 }
 
-/// What a Council's ask tells the person besides its subject: the estimate and the trust.
+/// What a Council's ask tells the person besides its title: the repo, the whole subject, the
+/// budget, the estimate and the trust.
 fn council_lines(t: &Tool) -> Vec<String> {
     let get = |k: &str| t.input.as_ref().and_then(|i| i.get(k));
-    let estimate = match get("estimate").and_then(|e| e.as_u64()) {
+    let text = |k: &str| get(k).and_then(|v| v.as_str()).unwrap_or_default();
+    let mut lines = vec![format!("Repo: {}", text("repo")), text("subject").into()];
+    lines.extend(
+        get("budget")
+            .and_then(|b| b.as_u64())
+            .map(|b| format!("Budget: {} tokens, then it pauses and asks", tokens(b))),
+    );
+    lines.push(match get("estimate").and_then(|e| e.as_u64()) {
         Some(e) => format!("About {} tokens, from earlier runs", tokens(e)),
         None => "No estimate: no earlier run of this mode".into(),
-    };
-    let why = get("why").and_then(|w| w.as_str()).unwrap_or_default();
-    let trust = match get("trusted").and_then(|w| w.as_bool()) {
+    });
+    let why = text("why");
+    lines.push(match get("trusted").and_then(|w| w.as_bool()) {
         Some(true) => format!("Trusted: {why}"),
         _ => format!("Untrusted: {why}. It runs sandboxed and read-only."),
-    };
-    let mut lines = vec![estimate, trust];
-    if get("unaccepted").and_then(|w| w.as_bool()) == Some(true) {
+    });
+    let on = |k: &str| get(k).and_then(|w| w.as_bool()) == Some(true);
+    if on("blocked") {
+        lines.push(
+            "Its agent settings are not accepted: accept them in the Council form first.".into(),
+        );
+    } else if on("unaccepted") {
         lines.push(
             "Its agent settings are not accepted: Claude stands in where Codex would load them."
                 .into(),

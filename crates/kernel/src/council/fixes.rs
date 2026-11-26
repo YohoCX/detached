@@ -161,7 +161,7 @@ impl Fix {
         let mut spec = Spec::new(&CLAUDE, &tree, Kind::Chat);
         spec.mode = detached_core::backend::Mode::Full.as_str().into();
         let seat = Seat {
-            who: Identity::of(Kind::Chat, &tree),
+            who: Identity::fix(),
             accept: Some(self.repo.clone()),
         };
         let s = Session::open_as(spec, None, Some(seat), cx);

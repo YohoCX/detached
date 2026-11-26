@@ -17,6 +17,7 @@ use crate::session::tests::{Fixture, boot_on};
 use crate::wait_for;
 
 mod fixes;
+mod launch;
 mod modes;
 mod real;
 mod triage;

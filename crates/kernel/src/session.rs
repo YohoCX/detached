@@ -950,6 +950,16 @@ impl Session {
         cx.notify();
     }
 
+    /// When the running turn began; the turn a Council launch belongs to.
+    pub(crate) fn turn_at(&self) -> Option<Instant> {
+        self.turn.as_ref().map(|t| t.0)
+    }
+
+    /// Whether the turn that began at `at` still runs, uncancelled.
+    pub(crate) fn same_turn(&self, at: Option<Instant>) -> bool {
+        !self.cancelled && self.turn_at() == at
+    }
+
     /// Asks whether the agent may start a Council; `reply` gets the answer, as of a permission.
     pub(crate) fn ask_council(
         &mut self,

@@ -280,4 +280,11 @@ fn only_a_chat_may_start_a_council() {
         );
     }
     assert!(Identity::owner().may(&act).is_err());
+    assert!(Identity::fix().may(&act).is_err());
+    let send = Act::Send(detached_core::host::SendAct {
+        to: "a".into(),
+        text: "hi".into(),
+        reply_to: None,
+    });
+    assert_eq!(Identity::fix().may(&send), Ok(()));
 }
