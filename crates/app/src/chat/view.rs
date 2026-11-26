@@ -71,30 +71,68 @@ const IMAGES: [ImageFormat; 4] = [
 /// A file held at most this long goes in with its text.
 const TEXT_MAX: u64 = 100_000;
 
+/// Claude refuses an image over this.
+const IMAGE_MAX: usize = 5 << 20;
+
+fn next_id() -> usize {
+    static ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A file or an image held beside the composer until Send.
 struct Attached {
+    id: usize,
     part: Part,
     size: usize,
     /// A file that is not under the session's repos.
     outside: bool,
+    /// Still being read.
+    reading: bool,
+    /// Why Send refuses it.
+    note: Option<String>,
 }
 
 impl Attached {
     fn restored(part: Part) -> Self {
-        let size = match &part {
-            Part::Image { data, .. } => data.len(),
-            Part::File { text, .. } => text.as_ref().map_or(0, String::len),
+        let (size, note) = match &part {
+            Part::Image { data, .. } => (data.len(), Self::too_big(data.len())),
+            Part::File { text, .. } => (text.as_ref().map_or(0, String::len), None),
         };
         Attached {
+            id: next_id(),
             part,
             size,
             outside: false,
+            reading: false,
+            note,
+        }
+    }
+
+    fn too_big(size: usize) -> Option<String> {
+        (size > IMAGE_MAX).then(|| "Over 5 MB: the agent refuses it".into())
+    }
+
+    /// The chip a file shows while it is read.
+    fn reading(path: &Path) -> Self {
+        let part = Part::File {
+            path: path.into(),
+            text: None,
+        };
+        Attached {
+            reading: true,
+            ..Self::restored(part)
         }
     }
 
     /// Reads the file at `path`; an image by its extension, else text up to `TEXT_MAX`, else a link.
-    fn load(path: &Path, repos: &[String]) -> Option<Self> {
-        let size = std::fs::metadata(path).ok().filter(|m| m.is_file())?.len();
+    fn load(path: &Path, repos: &[String]) -> Result<Self, String> {
+        let err = |e: std::io::Error| e.to_string();
+        let real = detached_core::os::canonical(path).map_err(err)?;
+        let size = std::fs::metadata(&real).map_err(err)?;
+        if !size.is_file() {
+            return Err("Not a file".into());
+        }
+        let size = size.len() as usize;
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
         let mime = match ext.as_deref() {
             Some("png") => Some("image/png"),
@@ -106,19 +144,33 @@ impl Attached {
         let part = match mime {
             Some(mime) => Part::Image {
                 mime: mime.into(),
-                data: std::fs::read(path).ok()?,
+                data: match size > IMAGE_MAX {
+                    true => Vec::new(),
+                    false => std::fs::read(&real).map_err(err)?,
+                },
             },
             None => Part::File {
                 path: path.into(),
-                text: (size <= TEXT_MAX)
-                    .then(|| std::fs::read_to_string(path).ok())
-                    .flatten(),
+                text: match size <= TEXT_MAX as usize {
+                    true => Some(std::fs::read(&real).map_err(err)?)
+                        .filter(|b| !b[..b.len().min(8192)].contains(&0))
+                        .and_then(|b| String::from_utf8(b).ok()),
+                    false => None,
+                },
             },
         };
-        Some(Attached {
-            part,
-            size: size as usize,
-            outside: !repos.iter().any(|r| path.starts_with(r)),
+        let outside = !repos
+            .iter()
+            .filter_map(|r| detached_core::os::canonical(Path::new(r)).ok())
+            .any(|r| real.starts_with(r));
+        let note = matches!(part, Part::Image { .. })
+            .then(|| Self::too_big(size))
+            .flatten();
+        Ok(Attached {
+            size,
+            outside,
+            note,
+            ..Self::restored(part)
         })
     }
 }
@@ -300,16 +352,22 @@ impl ChatView {
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.input.read(cx).value();
-        let parts = [&*typed]
-            .into_iter()
-            .chain(self.pasted.iter().map(String::as_str));
-        let text = parts
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
+        let pasted = self.pasted.iter().map(|p| p.trim_end_matches(['\r', '\n']));
+        let text = std::iter::once(typed.trim())
+            .chain(pasted)
+            .filter(|p| !p.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
         let parts: Vec<_> = self.attached.iter().map(|a| a.part.clone()).collect();
         if text.is_empty() && parts.is_empty() {
+            return;
+        }
+        let refusal = match self.attached.iter().find_map(|a| a.note.as_deref()) {
+            _ if self.attached.iter().any(|a| a.reading) => Some("Still reading the files"),
+            note => note,
+        };
+        if let Some(note) = refusal {
+            Activity::global(cx).update(cx, |a, cx| a.say(note, false, cx));
             return;
         }
         if self.takes_no_images(cx) && parts.iter().any(|p| matches!(p, Part::Image { .. })) {
@@ -342,14 +400,25 @@ impl ChatView {
             Some(s) => s.read(cx).repos(cx),
             None => vec![chat.repo.clone()],
         };
+        let chips: Vec<_> = paths.iter().map(|p| Attached::reading(p)).collect();
+        let ids: Vec<_> = chips.iter().map(|a| a.id).collect();
+        self.attached.extend(chips);
         let job = blocking::run(cx, move || {
             let load = |p: &PathBuf| Attached::load(p, &repos);
-            paths.iter().filter_map(load).collect::<Vec<_>>()
+            paths.iter().map(load).collect::<Vec<_>>()
         });
         cx.spawn(async move |this, cx| {
             let found = job.await;
             this.update(cx, |this, cx| {
-                this.attached.extend(found);
+                for (id, found) in ids.into_iter().zip(found) {
+                    let Some(slot) = this.attached.iter_mut().find(|a| a.id == id) else {
+                        continue;
+                    };
+                    match found {
+                        Ok(a) => *slot = Attached { id, ..a },
+                        Err(e) => (slot.reading, slot.note) = (false, Some(e)),
+                    }
+                }
                 this.composer_changed(cx);
             })
             .ok();
@@ -418,6 +487,8 @@ impl ChatView {
             let remove = self.me.clone();
             let name = a.part.chip().name;
             let (label, tip, bad) = match &a.part {
+                _ if a.reading => (format!("{name} · reading…"), "Reading".to_string(), false),
+                _ if a.note.is_some() => (name, a.note.clone().unwrap_or_default(), true),
                 Part::Image { .. } => match no_images {
                     true => (name, "This agent takes no images".to_string(), true),
                     false => (name, format!("Image, {}", byte_size(a.size)), false),
@@ -462,8 +533,21 @@ impl ChatView {
 
     /// One chip per queued prompt: a click takes it back into the input, the × drops it.
     fn queue_rows(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let lines: Vec<String> = (self.session.read(cx).queued(cx).iter())
-            .map(|t| t.lines().next().unwrap_or_default().to_owned())
+        let chat = self.session.read(cx);
+        let queue = chat.current().map(|s| s.read(cx).queue.clone());
+        let lines: Vec<String> = (queue.iter().flatten())
+            .map(
+                |p| match p.text.lines().next().filter(|l| !l.trim().is_empty()) {
+                    Some(line) => line.to_owned(),
+                    None => {
+                        let names: Vec<_> = p.chips().into_iter().map(|c| c.name).collect();
+                        match names.len() {
+                            0 | 1 => names.concat(),
+                            n => format!("{} +{}", names[0], n - 1),
+                        }
+                    }
+                },
+            )
             .collect();
         let rows: Vec<_> = lines
             .into_iter()
@@ -674,7 +758,7 @@ impl ChatView {
                     .appearance(false)
                     .text_size(theme::doc::BODY)
                     .on_paste(move |item, _, cx| {
-                        let (mut paths, mut images) = (vec![], vec![]);
+                        let (mut paths, mut images, mut skipped) = (vec![], vec![], false);
                         for entry in &item.entries {
                             match entry {
                                 ClipboardEntry::ExternalPaths(p) => {
@@ -685,6 +769,7 @@ impl ChatView {
                                         mime: i.format.mime_type().into(),
                                         data: i.bytes.clone(),
                                     }),
+                                ClipboardEntry::Image(_) => skipped = true,
                                 _ => {}
                             }
                         }
@@ -700,7 +785,13 @@ impl ChatView {
                                 })
                                 .is_ok();
                         }
-                        let Some(text) = item.text().filter(|t| Self::is_long(t)) else {
+                        if skipped {
+                            let note = "This image format is not supported; paste a PNG";
+                            Activity::global(cx).update(cx, |a, cx| a.say(note, false, cx));
+                            return true;
+                        }
+                        let long = |t: &String| Self::is_long(t) && !t.trim().is_empty();
+                        let Some(text) = item.text().filter(long) else {
                             return false;
                         };
                         me.update(cx, |this, cx| {

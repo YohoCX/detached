@@ -960,10 +960,13 @@ impl Tree {
             .when(r.ignored, |d| {
                 d.text_color(t.muted).aria_description("ignored")
             })
-            .when(!r.dir, |d| {
-                let file = DragFile(std::path::Path::new(&repo).join(&r.path));
-                d.on_drag(file, |file, _, _, cx| cx.new(|_| file.clone()))
-            })
+            .when(
+                !r.dir && self.roots.get(&entry.repo).is_some_and(|l| l.rev.is_none()),
+                |d| {
+                    let file = DragFile(std::path::Path::new(&repo).join(&r.path));
+                    d.on_drag(file, |file, _, _, cx| cx.new(|_| file.clone()))
+                },
+            )
             .on_aux_click({
                 let name = name.clone();
                 move |e, window, cx| {
