@@ -3,7 +3,7 @@
 Multi-repo git client, native on GPUI. It writes to a repo only through switch, stash, pull, managed
 worktrees (`git worktree add`/`remove`), Council's pinned trees and finder branches with their Merge
 and Discard, a Fix's branch and worktree, an MR subject's ref under `refs/detached/subjects/`, and
-the chat's turn snapshots (private refs) and restores:
+the chat's turn snapshots (private refs) and restores, and a file the person edits and saves in its tab:
 - `crates/core`: the backend (git, forge, accounts, search, settings, store, the agents' processes
   and PTYs in `proc`, defined processes in `processes`, plugins from a folder in `plugins`, the env store in `secrets`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
   with `fake_claude`, the scripted CLI the tests run, and trust), blocking

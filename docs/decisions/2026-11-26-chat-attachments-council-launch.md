@@ -12,6 +12,8 @@
   agent to start, it starts"), or never. Trust rules do not change with it.
 - Detached is the default app for code and Markdown files opened from the system. A file outside the
   workspace's repos opens as a plain tab, without git; one inside a git repo offers to add the repo.
+- After the review (2026-11-26): Detached edits files. A working-tree file and a loose file are edited and saved in
+  their tab; rejected: read-only with Open With only, and default for Markdown only.
 - Council's start form becomes steps on one page: what to review, how, who, access; the estimate and Start at the bottom.
 
 ## Rejected

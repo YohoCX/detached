@@ -69,6 +69,12 @@ Waits for the Antigravity branch to merge into main, then the tasks start.**
      argument hand-off as a unit test; the bundle's associations by reading the packaged `Info.plist` in `make e2e-app`
      only if cheap, otherwise said in the commit.
 
+9. **`072/editing`**: files are edited in their tab (the owner, after the review: Detached is the default app, so it
+   edits). A working-tree repo file and a loose file get an editable buffer; Save (`file.save`, Cmd+S) writes it
+   through core; the tab shows an unsaved marker; closing a changed tab, or the window, asks Save / Discard / Cancel;
+   a change on disk under an unchanged buffer reloads it, under a changed one offers Reload / Keep mine. A file at
+   another revision, a diff and a too-large file stay read-only. A save declares the repo's status stale.
+
 Order: 1, 4 and 6 in parallel; 2 and 3 after 1, as one task (one composer area); 5 and 7 after 1 (5 touches
 `acp/src/lib.rs`, 7 `kernel::session`). `ui/` additions (a chip, the
 step block) each in their own commit.
