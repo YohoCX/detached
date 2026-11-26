@@ -7,18 +7,22 @@ mod code;
 mod diff;
 mod file;
 mod goto;
+mod loose;
 mod markdown;
+mod open;
 mod settings;
 mod tree;
 mod viewer;
 
 pub use api::*;
+pub use open::{cli_paths, listen, open_paths, url_paths};
 
 use gpui_kit::{AnyView, App, AppContext, Window};
 
 use crate::actions::{self, Group, Registration};
 use crate::dock::{self, AppSpec};
 use changes::Changes;
+use loose::LooseDocs;
 use tree::Tree;
 pub(crate) use tree::{DragFile, ExplorerMode, choose_explorer, explorer_mode};
 use viewer::ViewerDocs;
@@ -55,6 +59,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     dock::register_app(cx, project);
     dock::register_doc(cx, "file", ViewerDocs);
     dock::register_doc(cx, "diff", ViewerDocs);
+    dock::register_doc(cx, "loose", LooseDocs);
     vec![actions::register(
         cx,
         "panel.project",

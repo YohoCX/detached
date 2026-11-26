@@ -88,6 +88,8 @@ pub enum Doc {
         id: String,
         title: String,
     },
+    /// A file no workspace repo holds, by its absolute path.
+    Loose(String),
     /// A shell moved out of the Terminal app; after a restart, a new one in `cwd`.
     Terminal {
         id: u64,
@@ -97,8 +99,9 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 16] = [
+    pub const KINDS: [&str; 17] = [
         "file",
+        "loose",
         "diff",
         "mr",
         "job",
@@ -138,6 +141,7 @@ impl Doc {
     pub fn kind(&self) -> &'static str {
         match self {
             Doc::File(_) => "file",
+            Doc::Loose(_) => "loose",
             Doc::Council { .. } => "council",
             Doc::CouncilTask { .. } => "council-task",
             Doc::CouncilStats { .. } => "council-stats",

@@ -181,6 +181,13 @@ fn current(cx: &App) -> Option<String> {
     Workspace::get(cx).id().map(String::from)
 }
 
+/// Adds the folder `path` to the current workspace.
+pub(crate) fn add_folder(path: String, cx: &mut App) -> Task<()> {
+    let ws = current(cx);
+    let to = ws.clone();
+    settings_call(cx, to, move |core| core::add_folder(core, ws, path))
+}
+
 /// Picks folders and adds them in order to the current workspace; the first folder ever creates
 /// the workspace.
 pub(crate) fn add_folders(cx: &mut App) {

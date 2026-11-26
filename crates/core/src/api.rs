@@ -2,10 +2,11 @@
 //! `repo` is a repo's path, its id everywhere; `op_id` and `query_id` are what `cancel` takes.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::git::patch::{self, FilePatch};
+use crate::git::runner::{self, Kind};
 use crate::git::snapshot::{self, Restore};
 use crate::git::{
     branches, checkout as smart, diff, log as logs, pull as pulls, remotes, worktree,
@@ -263,6 +264,13 @@ pub fn read_file(s: &AppState, repo: &str, rev: Option<&str>, path: &str) -> Res
     crate::testutil::wait_file_read(repo, path);
     let side = rev.map_or(Side::Worktree, |rev| Side::Rev { rev: rev.into() });
     diff::content(s, Path::new(repo), &side, path)
+}
+
+/// The root of the git repo holding `file`, if any.
+pub fn repo_root(s: &AppState, file: &Path) -> Option<PathBuf> {
+    let args = ["rev-parse", "--show-toplevel"];
+    let root = runner::out(&s.env(), file.parent()?, &args, Kind::Read).ok()?;
+    Some(PathBuf::from(root.trim()))
 }
 
 pub fn read_image(

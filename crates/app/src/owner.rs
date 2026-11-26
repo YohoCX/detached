@@ -1,5 +1,5 @@
 //! The owner socket's end in the app: `detached-cli` in a terminal tab reads with the owner's view
-//! and asks for `env run`, once per tab.
+//! and asks for `env run`, once per tab; a second `detached` hands it files to open.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -29,7 +29,7 @@ struct Owner {
 
 impl Global for Owner {}
 
-type Request = (u64, Ask, reply::Sender<Result<Value>>);
+type Request = (Option<u64>, Ask, reply::Sender<Result<Value>>);
 
 /// Opens the socket; `query` answers `detached-cli q`. Resolves once it listens.
 pub fn start(
@@ -53,9 +53,14 @@ pub fn start(
     });
     cx.spawn(async move |cx| {
         while let Some((tab, ask, send)) = rx.next().await {
-            let answer = cx.update(|cx| match ask {
-                Ask::Q(q) => query(&q, cx),
-                Ask::Env(profile) => env(tab, profile, cx),
+            let answer = cx.update(|cx| match (tab, ask) {
+                (_, Ask::Q(q)) => query(&q, cx),
+                (Some(tab), Ask::Env(profile)) => env(tab, profile, cx),
+                (_, Ask::Open(paths)) => {
+                    crate::files::open_paths(cx, paths);
+                    Task::ready(Ok(Value::Null))
+                }
+                (None, Ask::Env(_)) => Task::ready(Err(Error::Other(owner::REFUSED.into()))),
             });
             cx.spawn(async move |_| send.send(answer.await).ok())
                 .detach();

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use detached_app::{actions, keymap, owner, shell};
+use detached_app::{actions, files, keymap, owner, shell};
 use detached_core::state::AppState;
 use gpui_kit::App;
 use kernel::host::{self, Identity};
@@ -27,6 +27,19 @@ fn main() {
         std::process::exit(if ok { 0 } else { 1 });
     }
     let smoke = args.iter().any(|a| a == "--smoke");
+    let paths = if args.iter().any(|a| a == "--session") {
+        vec![]
+    } else {
+        files::cli_paths(&args)
+    };
+    // A running app opens the files itself; no second window starts for them.
+    if !smoke
+        && !paths.is_empty()
+        && let Ok(tiers) = detached_core::store::Tiers::detect()
+        && detached_core::owner::open(&tiers.data, paths.clone()).is_ok()
+    {
+        return;
+    }
     let core = match AppState::boot() {
         Ok(s) => Arc::new(s),
         Err(e) => fail(e),
@@ -37,6 +50,9 @@ fn main() {
     }
     let (ui, ui_problem) = ui_state::load(&core.config_dir);
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    // Before `run`: macOS delivers the files Finder opens us with once the app has launched.
+    let (urls, opened) = futures::channel::mpsc::unbounded();
+    app.on_open_urls(move |u| _ = urls.unbounded_send(u));
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
         cx.set_app_identity("com.w-devs.detached", "Detached");
@@ -68,6 +84,8 @@ fn main() {
         if let Err(e) = shell::open(cx) {
             fail(e);
         }
+        files::listen(opened, cx);
+        files::open_paths(cx, paths);
         if smoke {
             // Opening the window drew its first frame. Presenting it is not awaited: a hidden
             // or occluded window gets no frames. Linux's event loop drops a quit made before it runs.
