@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::hash::{BuildHasher, RandomState};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -267,15 +267,20 @@ impl Chip {
     }
 }
 
+/// A path's file name, or the path when it has none.
+pub fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
 impl Part {
     pub fn chip(&self) -> Chip {
         match self {
             Part::Image { mime, .. } => Chip::image(mime),
             Part::File { path, text } => Chip {
-                name: path.file_name().map_or_else(
-                    || path.display().to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                ),
+                name: file_name(path),
                 kind: if text.is_some() {
                     ChipKind::Text
                 } else {
@@ -283,6 +288,25 @@ impl Part {
                 },
             },
         }
+    }
+
+    /// The chip of a text `as_text` made, when it is exactly one.
+    pub fn chip_of_text(text: &str) -> Option<Chip> {
+        let chip = |path: &str, kind| {
+            let name = file_name(Path::new(path));
+            Some(Chip { name, kind })
+        };
+        if let Some(path) = text
+            .strip_prefix("The file ")
+            .and_then(|t| t.strip_suffix(" is attached by its path; read it when needed."))
+        {
+            return chip(path, ChipKind::Link);
+        }
+        let (path, _) = text
+            .strip_prefix("File ")?
+            .strip_suffix("\n```")?
+            .split_once(":\n```\n")?;
+        chip(path, ChipKind::Text)
     }
 
     /// What goes to an agent that has no block for the part; an image has none.

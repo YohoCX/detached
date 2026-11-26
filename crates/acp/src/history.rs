@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use detached_core::adapters::{ANTIGRAVITY, Provider};
-use detached_core::backend::{History, Past, Tool, Update};
+use detached_core::backend::{History, Part, Past, Tool, Update};
 use detached_core::error::{Error, Result};
 use detached_core::state::AppState;
 use detached_core::{chat_index, os, proc};
@@ -302,7 +302,11 @@ fn codex_transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
         let p = &row["payload"];
         if let Some(message) = user(&row) {
             turns.push(out.len());
-            out.extend([Update::User(message.into()), Update::Break]);
+            let shown = match Part::chip_of_text(message) {
+                Some(chip) => Update::Attached(vec![chip]),
+                None => Update::User(message.into()),
+            };
+            out.extend([shown, Update::Break]);
         } else if row["type"] == "event_msg" && p["type"] == "thread_rolled_back" {
             let keep = turns
                 .len()

@@ -575,6 +575,7 @@ fn messages(updates: Vec<Update>) -> Vec<Item> {
                 Some(Item::Text(was)) if !split => was.push_str(&text),
                 _ => out.push(Item::Text(text)),
             },
+            Update::Attached(chips) => out.push(Item::Attached(chips)),
             _ => {
                 split = true;
                 continue;
@@ -612,6 +613,10 @@ impl Render for Transcript {
                     let (label, body) = match item {
                         Item::User(text) => ("You", text.clone()),
                         Item::Text(text) => ("Assistant", text.clone()),
+                        Item::Attached(chips) => {
+                            let names: Vec<_> = chips.iter().map(|c| c.name.as_str()).collect();
+                            ("Attached", names.join(", "))
+                        }
                         Item::Tool(tool) => (
                             tool.title
                                 .as_deref()

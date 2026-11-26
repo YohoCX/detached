@@ -1591,3 +1591,34 @@ fn a_user_message_chunk_of_an_image_or_a_link_is_a_chip() {
     };
     assert_eq!(chunk(link), Some(Update::Attached(vec![chip])));
 }
+
+#[test]
+fn a_replayed_resource_or_file_text_is_a_chip_and_a_file_uri_encodes_every_reserved_byte() {
+    let chunk = |c| {
+        update(
+            &CODEX,
+            SessionUpdate::UserMessageChunk(ContentChunk::new(c)),
+        )
+    };
+    let path = Path::new("/w/a b#c?d%e.rs");
+    assert_eq!(uri(path), "file:///w/a%20b%23c%3Fd%25e.rs");
+    let text = TextResourceContents::new("x", uri(path));
+    let resource = ContentBlock::Resource(EmbeddedResource::new(
+        EmbeddedResourceResource::TextResourceContents(text),
+    ));
+    let chip = |kind| {
+        Some(Update::Attached(vec![Chip {
+            name: "a b#c?d%e.rs".into(),
+            kind,
+        }]))
+    };
+    assert_eq!(chunk(resource), chip(ChipKind::Text));
+    let part = Part::File {
+        path: path.into(),
+        text: None,
+    };
+    let as_text = ContentBlock::Text(TextContent::new(part.as_text().unwrap()));
+    assert_eq!(chunk(as_text), chip(ChipKind::Link));
+    let typed = ContentBlock::Text(TextContent::new("hello"));
+    assert_eq!(chunk(typed), Some(Update::User("hello".into())));
+}
