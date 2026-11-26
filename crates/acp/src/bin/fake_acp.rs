@@ -13,6 +13,8 @@
 //! - `env` says the names in its env; `params` all of its `session/new` or `session/load`; `model`
 //!   its model and mode, `effort` its effort; `home` the names in its `CODEX_HOME`; `sessions` the
 //!   count of its open sessions;
+//! - `parts` says the kinds of the prompt's blocks: `text`, `image:<mime>`, `resource:<uri>` and
+//!   `link:<uri>`, comma separated;
 //! - `write <path> <text>` writes a file under the cwd;
 //! - `hold-close` answers the session's close only once the next prompt, of any session, comes;
 //! - `run <text>` runs a command whose output, `<text>` and a newline twice, comes in pieces beside
@@ -125,6 +127,7 @@ fn main() {
             "initialize" => reply(json!({
                 "protocolVersion": 1,
                 "agentCapabilities": {"loadSession": true,
+                    "promptCapabilities": {"image": true, "embeddedContext": true},
                     "sessionCapabilities": {"close": {}, "list": {}}},
                 "agentInfo": {"name": "fake_acp", "version": version},
                 "authMethods": [],
@@ -336,7 +339,26 @@ fn main() {
                     send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
                 }
                 let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
-                let text = params["prompt"][0]["text"].as_str().unwrap_or_default();
+                let blocks = params["prompt"].as_array().cloned().unwrap_or_default();
+                let kinds: Vec<String> = blocks
+                    .iter()
+                    .map(|b| match b["type"].as_str().unwrap_or_default() {
+                        "image" => format!("image:{}", b["mimeType"].as_str().unwrap_or_default()),
+                        "resource" => format!(
+                            "resource:{}",
+                            b["resource"]["uri"].as_str().unwrap_or_default()
+                        ),
+                        "resource_link" => {
+                            format!("link:{}", b["uri"].as_str().unwrap_or_default())
+                        }
+                        kind => kind.into(),
+                    })
+                    .collect();
+                let kinds = kinds.join(",");
+                let text = (blocks.iter())
+                    .find(|b| b["type"] == "text")
+                    .and_then(|b| b["text"].as_str())
+                    .unwrap_or_default();
                 let line = |p: &str| {
                     text.lines()
                         .find_map(|l| l.strip_prefix(p))
@@ -380,6 +402,7 @@ fn main() {
                         cancelled,
                         answer,
                         rid,
+                        kinds,
                     };
                     let result = text.split(';').try_for_each(|step| turn.step(step.trim()));
                     let response = match result {
@@ -504,6 +527,7 @@ struct Turn<'a> {
     cancelled: Receiver<()>,
     answer: Receiver<Value>,
     rid: u64,
+    kinds: String,
 }
 
 fn update(out: &Out, sid: &str, update: Value) {
@@ -734,6 +758,7 @@ impl Turn<'_> {
                 names.sort();
                 self.say(&names.join(","));
             }
+            "parts" => self.say(&self.kinds),
             "params" => self.say(&self.session(|s| s.params.to_string())),
             "codex-config" => self.say(&std::env::var("CODEX_CONFIG").unwrap_or_default()),
             "hold-close" => {

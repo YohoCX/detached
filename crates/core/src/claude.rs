@@ -17,9 +17,9 @@ use tempfile::TempDir;
 
 use crate::adapters::{self, BLOCK, Cli, Provider, Version};
 use crate::backend::{
-    self, Account, Answer, Ask, Backend, Caps, Cause, Choice, Config, Event, Events, Exit, Failure,
-    Kind, Limit, Model, Opened, Part, Past, Piece, Question, Reply, Setting, SlashCommand, Spec,
-    StopReason, Task, Tool, Turn, TurnConfig, Update,
+    self, Account, Answer, Ask, Backend, Caps, Cause, Choice, Config, ContextPart, Event, Events,
+    Exit, Failure, Kind, Limit, Model, Opened, Part, Past, Piece, Prompt, Question, Reply, Setting,
+    SlashCommand, Spec, StopReason, Task, Tool, Turn, TurnConfig, Update,
 };
 use crate::error::{Error, Result};
 use crate::proc::{self, GRACE, Proc};
@@ -456,6 +456,7 @@ fn start_in(
             .then(|| commands(&init["commands"])),
         account: init.get("account").map(account),
         unread: history.as_ref().is_some_and(Option::is_none),
+        images: true,
     };
     live.0
         .open(opened, history.flatten().unwrap_or_default(), events)?;
@@ -717,8 +718,26 @@ impl Drop for Live {
     }
 }
 
+/// A prompt's content: its text alone as a string, else blocks.
+fn content(prompt: &Prompt) -> Value {
+    if prompt.parts.is_empty() {
+        return json!(prompt.text);
+    }
+    let text = |t: &str| json!({"type": "text", "text": t});
+    let mut blocks = vec![text(&prompt.text)];
+    blocks.retain(|_| !prompt.text.is_empty());
+    for part in &prompt.parts {
+        blocks.push(match part {
+            Part::Image { mime, data } => json!({"type": "image", "source": {
+                "type": "base64", "media_type": mime, "data": backend::base64(data)}}),
+            file => text(&file.as_text().unwrap_or_default()),
+        });
+    }
+    json!(blocks)
+}
+
 impl backend::Session for Live {
-    fn prompt(&self, text: &str) -> Result<()> {
+    fn prompt(&self, prompt: &Prompt) -> Result<()> {
         let mut st = self.0.state.lock().unwrap();
         (st.busy, st.cancelled) = (true, false);
         st.turn.clear();
@@ -727,7 +746,7 @@ impl backend::Session for Live {
             effort: st.effort(),
             ..TurnConfig::default()
         };
-        let message = json!({"role": "user", "content": text});
+        let message = json!({"role": "user", "content": content(prompt)});
         let sent = self
             .0
             .send(json!({"type": "user", "message": message, "parent_tool_use_id": null}));
@@ -1146,10 +1165,13 @@ impl Client {
                 match r {
                     Ok(u) => {
                         let parts = u["categories"].as_array().into_iter().flatten();
-                        let parts = parts.filter(|p| p["name"] != "Free space").map(|p| Part {
-                            name: text(&p["name"]),
-                            tokens: p["tokens"].as_u64().unwrap_or_default(),
-                        });
+                        let parts =
+                            parts
+                                .filter(|p| p["name"] != "Free space")
+                                .map(|p| ContextPart {
+                                    name: text(&p["name"]),
+                                    tokens: p["tokens"].as_u64().unwrap_or_default(),
+                                });
                         c.update(Update::Usage {
                             used: u["totalTokens"].as_u64().unwrap_or_default(),
                             size: u["maxTokens"].as_u64().unwrap_or_default(),

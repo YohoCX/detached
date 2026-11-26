@@ -93,7 +93,7 @@ fn a_turn_streams_its_text_and_ends_after_its_updates() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
     adapter
-        .prompt(&id, "say one two three four", TurnConfig::default())
+        .prompt(&id, &"say one two three four".into(), TurnConfig::default())
         .unwrap();
     let mut usage = None;
     let mut said = String::new();
@@ -120,7 +120,9 @@ fn a_turn_streams_its_text_and_ends_after_its_updates() {
 fn cancel_ends_the_turn_and_its_foreground_command() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "stall", TurnConfig::default()).unwrap();
+    adapter
+        .prompt(&id, &"stall".into(), TurnConfig::default())
+        .unwrap();
     let pid = until(&rx, |e| match e {
         Event::Update(_, Update::Tool(t)) => t.input?["pid"].as_u64(),
         _ => None,
@@ -136,7 +138,9 @@ fn cancel_ends_the_turn_and_its_foreground_command() {
 fn the_adapter_hears_allow_once_whatever_the_options() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "ask", TurnConfig::default()).unwrap();
+    adapter
+        .prompt(&id, &"ask".into(), TurnConfig::default())
+        .unwrap();
     let (ask, reply) = until(&rx, |e| match e {
         Event::Ask(_, ask, _, reply) => Some((ask, reply)),
         _ => None,
@@ -152,7 +156,7 @@ fn malformed_updates_leave_the_session_running() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
     adapter
-        .prompt(&id, "malformed", TurnConfig::default())
+        .prompt(&id, &"malformed".into(), TurnConfig::default())
         .unwrap();
     let (said, end) = text(&rx);
     assert_eq!(said, "still here");
@@ -163,7 +167,9 @@ fn malformed_updates_leave_the_session_running() {
 fn a_crash_reports_its_code_and_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "die", TurnConfig::default()).unwrap();
+    adapter
+        .prompt(&id, &"die".into(), TurnConfig::default())
+        .unwrap();
     let (x, asked) = exit(&rx);
     assert_eq!((x.code, asked), (Some(3), false));
     assert!(x.stderr.contains("died mid-turn"), "{}", x.stderr);
@@ -174,7 +180,9 @@ fn a_crash_reports_its_code_and_stderr() {
 fn closing_stdin_ends_the_adapter_quietly_and_its_own_group_child() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "spawn", TurnConfig::default()).unwrap();
+    adapter
+        .prompt(&id, &"spawn".into(), TurnConfig::default())
+        .unwrap();
     let child = pid_in(&text(&rx).0);
     let pid = adapter.pid;
     assert!(alive(child));
@@ -193,7 +201,9 @@ fn host() {
         return;
     };
     let (adapter, rx, id) = start(&std::env::temp_dir());
-    adapter.prompt(&id, "spawn", TurnConfig::default()).unwrap();
+    adapter
+        .prompt(&id, &"spawn".into(), TurnConfig::default())
+        .unwrap();
     let child = pid_in(&text(&rx).0);
     let tmp = PathBuf::from(&file).with_extension("tmp");
     std::fs::write(&tmp, format!("{} {child}", adapter.pid)).unwrap();
@@ -396,11 +406,11 @@ fn after_a_session_s_close_the_backend_holds_no_event_for_its_id() {
     drop(loaded);
     closed(&rx);
     let (held, rx) = open(&acp, &sb, None);
-    held.prompt("hold-close").unwrap();
+    held.prompt(&"hold-close".into()).unwrap();
     said(&rx);
     drop(held);
     // The fake answers that close only on this prompt.
-    other.prompt("say ping").unwrap();
+    other.prompt(&"say ping".into()).unwrap();
     closed(&rx);
     let demux = other.live.demux.lock().unwrap();
     assert!(demux.early.is_empty());
@@ -411,7 +421,7 @@ fn after_a_session_s_close_the_backend_holds_no_event_for_its_id() {
 fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_anew() {
     let (acp, sb) = (Acp::default(), sandbox());
     let (s, rx) = open(&acp, &sb, None);
-    s.prompt("die").unwrap();
+    s.prompt(&"die".into()).unwrap();
     until(&rx, |e| {
         matches!(e, backend::Event::Exited(_)).then_some(())
     });
@@ -438,7 +448,7 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     // `s` pins the dead adapter, as a start still on it would.
     let (next, rx) = open(&acp, &sb, None);
     assert_ne!(next.live.adapter.pid, s.live.adapter.pid);
-    next.prompt("say anew").unwrap();
+    next.prompt(&"say anew".into()).unwrap();
     assert_eq!(said(&rx), "anew");
 }
 
@@ -449,11 +459,11 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly() {
     testutil::install(&sb.state, "2.0.0");
     let (new, new_rx) = open(&acp, &sb, None);
     assert_ne!(old.live.adapter.pid, new.live.adapter.pid);
-    old.prompt("die").unwrap();
+    old.prompt(&"die".into()).unwrap();
     until(&old_rx, |e| {
         matches!(e, backend::Event::Exited(_)).then_some(())
     });
-    new.prompt("say still here").unwrap();
+    new.prompt(&"say still here".into()).unwrap();
     assert_eq!(said(&new_rx), "still here");
     let stderr = "Error: write EPIPE".into();
     let exit = Exit {
@@ -498,7 +508,7 @@ fn with_tools(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Strin
     }));
     let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
     let open = open.unwrap();
-    open.prompt("params").unwrap();
+    open.prompt(&"params".into()).unwrap();
     let params: Value = serde_json::from_str(&said(&rx)).unwrap();
     let server = &params["mcpServers"][0];
     assert_eq!(server["type"], "http");
@@ -664,7 +674,7 @@ fn a_session_s_tools_are_refused_once_it_closes_and_a_load_gets_a_new_path() {
         Box::new(move |e| _ = tx.send(e)),
     );
     let open = open.unwrap();
-    open.prompt("params").unwrap();
+    open.prompt(&"params".into()).unwrap();
     let params = said(&rx);
     let params: Value = serde_json::from_str(params.trim_start_matches("replayed")).unwrap();
     let again = params["mcpServers"][0]["url"].as_str().unwrap();
@@ -675,7 +685,7 @@ fn a_session_s_tools_are_refused_once_it_closes_and_a_load_gets_a_new_path() {
 fn a_bare_ask_takes_its_call_s_title_and_input_and_the_host_s_own_tool_is_allowed_unasked() {
     let (acp, sb) = (Acp::default(), sandbox());
     let (open, rx, _url, _calls) = with_tools(&acp, &sb);
-    open.prompt("bare").unwrap();
+    open.prompt(&"bare".into()).unwrap();
     let (ask, reply) = until(&rx, |e| match e {
         backend::Event::Ask(ask, reply) => Some((ask, reply)),
         _ => None,
@@ -688,7 +698,7 @@ fn a_bare_ask_takes_its_call_s_title_and_input_and_the_host_s_own_tool_is_allowe
     );
     reply.send(Answer::Reject);
     assert_eq!(said(&rx), "picked reject_once");
-    open.prompt("host-ask").unwrap();
+    open.prompt(&"host-ask".into()).unwrap();
     let mut asked = false;
     let text = until(&rx, |e| match e {
         backend::Event::Ask(..) => {
@@ -722,9 +732,9 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
         _ => None,
     });
     assert_eq!(config[0].value, Mode::Ask.as_str());
-    open.prompt("model").unwrap();
+    open.prompt(&"model".into()).unwrap();
     assert_eq!(said(&rx), "gpt-5.5 read-only");
-    open.prompt("codex-config").unwrap();
+    open.prompt(&"codex-config".into()).unwrap();
     assert_eq!(
         said(&rx),
         "",
@@ -765,7 +775,7 @@ fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
     });
     let effort = config.iter().find(|c| c.id == "effort").unwrap();
     assert_eq!(effort.value, "high");
-    open.prompt("effort").unwrap();
+    open.prompt(&"effort".into()).unwrap();
     assert_eq!(said(&rx), "high");
 }
 
@@ -776,7 +786,7 @@ fn a_refused_setting_fails_the_open_and_closes_its_session() {
     let kept = kept.unwrap();
     let (refused, _) = codex_open(&acp, &sb, "low", Some("no-such-model"));
     assert!(refused.is_err());
-    kept.prompt("sessions").unwrap();
+    kept.prompt(&"sessions".into()).unwrap();
     assert_eq!(said(&rx), "1");
 }
 
@@ -880,7 +890,7 @@ fn a_codex_prompt_uses_a_model_switch_still_waiting_for_its_ack() {
     std::fs::write(sb.path("hold-config"), "").unwrap();
     open.set(Setting::Model("gpt-5.5-mini".into())).unwrap();
     open.set(Setting::Effort("high".into())).unwrap();
-    open.prompt("model; effort").unwrap();
+    open.prompt(&"model; effort".into()).unwrap();
     open.live.adapter.call(ListSessionsRequest::new()).unwrap();
 
     let mut said = String::new();
@@ -904,7 +914,7 @@ fn a_codex_prompt_uses_a_model_switch_still_waiting_for_its_ack() {
 fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, _) = codex_chat(&acp, &sb);
-    open.prompt("run hi").unwrap();
+    open.prompt(&"run hi".into()).unwrap();
     let mut seen = Tool::default();
     until(&rx, |e| match e {
         backend::Event::Update(Update::Tool(t)) => {
@@ -1044,7 +1054,7 @@ fn codex_past_keeps_a_chat_when_title_lookup_hits_the_record_limit() {
 fn codex_delete_archives_its_session() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, opened) = codex_chat(&acp, &sb);
-    open.prompt("say hello").unwrap();
+    open.prompt(&"say hello".into()).unwrap();
     assert_eq!(said(&rx), "hello");
     let repo = sb.dir.path().display().to_string();
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
@@ -1081,10 +1091,10 @@ fn a_codex_session_without_the_host_s_tools_gets_no_mcp_server() {
     let (tx, rx) = mpsc::channel();
     let open = Acp::default().start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
     let open = open.unwrap();
-    open.prompt("params").unwrap();
+    open.prompt(&"params".into()).unwrap();
     let params: Value = serde_json::from_str(&said(&rx)).unwrap();
     assert_eq!(params["mcpServers"], json!([]));
-    open.prompt("codex-config").unwrap();
+    open.prompt(&"codex-config".into()).unwrap();
     assert_eq!(said(&rx), "", "no server to turn off");
 }
 
@@ -1099,7 +1109,7 @@ fn a_codex_chat_turns_off_each_server_of_the_user_s_config_and_the_project_layer
     let project = "[mcp_servers.repo]\ncommand = \"r\"\n[mcp_servers.both]\nenabled = true\n";
     std::fs::write(layer.join("config.toml"), project).unwrap();
     let (open, rx, _, _) = with_tools(&acp, &sb);
-    open.prompt("codex-config").unwrap();
+    open.prompt(&"codex-config".into()).unwrap();
     let config: Value = serde_json::from_str(&said(&rx)).unwrap();
     let off = json!({"enabled": false});
     let want = json!({"mcp_servers": {"mine": off, "both": off, "repo": off}});
@@ -1186,7 +1196,7 @@ fn an_untrusted_codex_participant_runs_on_a_home_of_its_own_with_the_login_alone
     let acp = Acp::default();
     let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
     let open = open.unwrap();
-    open.prompt("home").unwrap();
+    open.prompt(&"home".into()).unwrap();
     // Its own sessions file aside, the fake's history.
     let home = said(&rx);
     assert!(home.starts_with("auth.json"), "{home}");
@@ -1197,7 +1207,7 @@ fn an_untrusted_codex_participant_runs_on_a_home_of_its_own_with_the_login_alone
     let link = std::fs::read_link(tmp.join("codex-home/auth.json")).unwrap();
     assert_eq!(link, owner.join("auth.json"));
     let (chat, rx, _) = codex_chat(&acp, &sb);
-    chat.prompt("home").unwrap();
+    chat.prompt(&"home".into()).unwrap();
     assert!(
         said(&rx).contains("rules"),
         "a chat runs on the owner's home"
@@ -1294,7 +1304,7 @@ fn antigravity_runs_built_in_acp_cli_normalizes_thought_level_modes_and_account(
     });
     assert_eq!(option(&config, "effort"), "xhigh");
 
-    open.prompt("model; effort").unwrap();
+    open.prompt(&"model; effort".into()).unwrap();
     assert_eq!(said(&rx), "gemini-4-neon accept-editsxhigh");
 }
 
@@ -1317,7 +1327,7 @@ fn antigravity_host_mcp_handles_server_discover_and_auto_allows_mcp_prefix() {
     let open = acp
         .start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)))
         .unwrap();
-    open.prompt(r#"act {"action":"done","args":{"nothing_found":true}}; host-ask"#)
+    open.prompt(&r#"act {"action":"done","args":{"nothing_found":true}}; host-ask"#.into())
         .unwrap();
     let mut text = String::new();
     let mut asked = false;
@@ -1336,7 +1346,7 @@ fn antigravity_host_mcp_handles_server_discover_and_auto_allows_mcp_prefix() {
 
     // Spoofed title on run_command, foreign host prefix, and missing tool name must all ask.
     for step in ["spoof-title", "foreign-host", "no-name-ask"] {
-        open.prompt(step).unwrap();
+        open.prompt(&step.into()).unwrap();
         let mut asked_step = false;
         let mut said_step = String::new();
         while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
@@ -1398,9 +1408,9 @@ fn antigravity_chat_and_council_full_use_separate_processes_and_refuse_live_full
     assert_eq!(option(&council_opened.config, "mode"), Mode::Full.as_str());
     assert_ne!(chat.live.adapter.pid, council.live.adapter.pid);
 
-    chat.prompt("skip-perms").unwrap();
+    chat.prompt(&"skip-perms".into()).unwrap();
     assert_eq!(said(&chat_rx), "false");
-    council.prompt("skip-perms").unwrap();
+    council.prompt(&"skip-perms".into()).unwrap();
     assert_eq!(said(&council_rx), "true");
 
     let err = chat
@@ -1408,7 +1418,7 @@ fn antigravity_chat_and_council_full_use_separate_processes_and_refuse_live_full
         .unwrap_err()
         .to_string();
     assert!(err.contains("only supports Full access"), "{err}");
-    chat.prompt("model").unwrap();
+    chat.prompt(&"model".into()).unwrap();
     assert_eq!(said(&chat_rx), "gemini-4-neon auto");
 
     let leave = council
@@ -1434,7 +1444,7 @@ fn antigravity_chat_and_council_full_use_separate_processes_and_refuse_live_full
         _ => None,
     });
     assert_eq!(option(&untrusted_opened.config, "mode"), Mode::Ask.as_str());
-    untrusted.prompt("skip-perms").unwrap();
+    untrusted.prompt(&"skip-perms".into()).unwrap();
     assert_eq!(said(&untrusted_rx), "false");
     assert_eq!(untrusted.live.adapter.pid, chat.live.adapter.pid);
 }
@@ -1452,7 +1462,7 @@ fn acp_diff_content_reports_added_and_removed_lines() {
     let open = acp
         .start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)))
         .unwrap();
-    open.prompt("diff").unwrap();
+    open.prompt(&"diff".into()).unwrap();
     let mut lines = None;
     while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
         match e {
@@ -1522,4 +1532,62 @@ fn antigravity_past_and_transcript_read_passively_from_disk_and_delete_is_local(
 
     acp.delete(&sb.state, &spec, id).unwrap();
     assert!(acp.adapters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_prompt_s_parts_go_as_the_blocks_the_agent_takes_and_as_text_or_a_refusal_otherwise() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut adapter, rx, id) = start(dir.path());
+    let options = Options {
+        cwd: dir.path().into(),
+        ..Default::default()
+    };
+    assert!(adapter.new_session(&options).unwrap().0.images);
+    let image = Part::Image {
+        mime: "image/png".into(),
+        data: vec![1, 2, 3],
+    };
+    let doc = Part::File {
+        path: "/w/my file.rs".into(),
+        text: Some("fn main() {}".into()),
+    };
+    let link = Part::File {
+        path: "/w/big.bin".into(),
+        text: None,
+    };
+    let prompt = Prompt {
+        text: "parts".into(),
+        parts: vec![image, doc.clone(), link.clone()],
+    };
+    adapter.prompt(&id, &prompt, TurnConfig::default()).unwrap();
+    let kinds = "text,image:image/png,resource:file:///w/my%20file.rs,link:file:///w/big.bin";
+    assert_eq!(text(&rx).0, kinds);
+    adapter.prompts = PromptCapabilities::new();
+    let refused = adapter.blocks(&prompt).unwrap_err().to_string();
+    assert!(refused.contains("no images"), "{refused}");
+    let files = Prompt {
+        text: "parts".into(),
+        parts: vec![doc, link],
+    };
+    adapter.prompt(&id, &files, TurnConfig::default()).unwrap();
+    assert_eq!(text(&rx).0, "text,text,link:file:///w/big.bin");
+}
+
+#[test]
+fn a_user_message_chunk_of_an_image_or_a_link_is_a_chip() {
+    let chunk = |c| {
+        update(
+            &CODEX,
+            SessionUpdate::UserMessageChunk(ContentChunk::new(c)),
+        )
+    };
+    let image = ContentBlock::Image(ImageContent::new("AA==", "image/png"));
+    let chip = Update::Attached(vec![Chip::image("image/png")]);
+    assert_eq!(chunk(image), Some(chip));
+    let link = ContentBlock::ResourceLink(ResourceLink::new("a.bin", "file:///a.bin"));
+    let chip = Chip {
+        name: "a.bin".into(),
+        kind: ChipKind::Link,
+    };
+    assert_eq!(chunk(link), Some(Update::Attached(vec![chip])));
 }

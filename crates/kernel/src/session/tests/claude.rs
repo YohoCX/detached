@@ -1,5 +1,6 @@
 //! Claude's own, on `fake_claude`: what the host spawns it with, its rule keys and what it blocks.
 
+use detached_core::backend::{Chip, Part, Prompt};
 use detached_core::store::{Kind as StoreKind, RepoStore};
 
 use super::*;
@@ -584,4 +585,31 @@ fn a_process_reaches_agents_by_its_level_and_its_profile_values_never_leave(
     }
     assert_eq!(turn(&chat, &format!("env {secret}"), cx), "");
     assert!(!turn(&chat, "env", cx).contains("API_TOKEN"));
+}
+
+#[gpui::test]
+fn a_prompt_s_attachments_show_as_chips_after_it_and_a_resume_keeps_them(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    assert!(s.read_with(cx, |s, _| s.images));
+    let image = Part::Image {
+        mime: "image/png".into(),
+        data: vec![1, 2, 3],
+    };
+    let prompt = Prompt {
+        text: "parts".into(),
+        parts: vec![image],
+    };
+    s.update(cx, |s, cx| s.prompt_parts(prompt, cx));
+    wait_until(cx, |cx| s.read(cx).state != State::Running);
+    assert_eq!(said(&s, 0, cx), "text,image:image/png");
+    let chips = Item::Attached(vec![Chip::image("image/png")]);
+    let id = s.read_with(cx, |s, _| {
+        let at = s.items.iter().position(|i| matches!(i, Item::User(_)));
+        assert_eq!(s.items[at.unwrap() + 1], chips);
+        s.id.clone()
+    });
+    s.update(cx, |s, cx| s.end(cx));
+    let resumed = open_spec(f.spec(Kind::Chat), id, cx);
+    resumed.read_with(cx, |s, _| assert!(s.items.contains(&chips)));
 }

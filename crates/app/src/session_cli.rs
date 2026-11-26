@@ -390,6 +390,10 @@ fn line(item: &Item) -> String {
         Item::Note(t) => format!("[note] {t}"),
         Item::Error(t) => format!("[error] {t}"),
         Item::Act(a) => format!("[act] {a:?}"),
+        Item::Attached(chips) => {
+            let names: Vec<_> = chips.iter().map(|c| c.name.as_str()).collect();
+            format!("[attached] {}", names.join(", "))
+        }
         Item::Woken => "[woken] new messages".into(),
         Item::Text(t) | Item::Thought(t) => t.clone(),
     }

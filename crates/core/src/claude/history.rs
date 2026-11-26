@@ -14,7 +14,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
 use super::{result, tool, wsl};
-use crate::backend::{Past, Update};
+use crate::backend::{Chip, Past, Update};
 use crate::error::{Error, Result};
 
 /// Where the CLI cuts a project folder's name and adds a hash.
@@ -394,6 +394,10 @@ fn updates(l: &Value, names: &mut HashMap<String, String>, out: &mut Vec<Update>
         match (b["type"].as_str(), user) {
             (Some("text"), true) => {
                 out.extend(text("text").filter(|t| !noise(t)).map(Update::User))
+            }
+            (Some("image"), true) => {
+                let mime = b["source"]["media_type"].as_str().unwrap_or_default();
+                out.push(Update::Attached(vec![Chip::image(mime)]));
             }
             (Some("text"), false) => out.extend(text("text").map(Update::Text)),
             (Some("thinking"), false) => out.extend(text("thinking").map(Update::Thought)),
