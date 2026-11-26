@@ -347,11 +347,12 @@ pub fn preview(core: &AppState, s: &Start, cancel: &Cancel) -> Result<Preview> {
         false => marks::classify(core, &p, &subject)?,
     };
     let project = head_trust(core, &subject)?;
+    let refused = project.refuses(CODEX.trust).map(String::from);
     Ok(Preview {
         authors: marks::authors(&core.env(), &p, &subject)?,
         accepted: trust::trusted(&core.config_dir, &s.repo, &project),
         fingerprint: project.fingerprint,
-        refused: project.refused,
+        refused,
         items: project.items,
         trust,
         subject,
@@ -364,7 +365,7 @@ pub fn accept(core: &AppState, pv: &Preview) -> Result<()> {
     let project = trust::Project {
         items: pv.items.clone(),
         fingerprint: pv.fingerprint.clone(),
-        refused: None,
+        refused: vec![],
     };
     trust::trust(&core.config_dir, &pv.subject.repo, &project)
 }

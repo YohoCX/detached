@@ -138,7 +138,7 @@ fn the_adapter_hears_allow_once_whatever_the_options() {
     let (adapter, rx, id) = start(dir.path());
     adapter.prompt(&id, "ask", TurnConfig::default()).unwrap();
     let (ask, reply) = until(&rx, |e| match e {
-        Event::Ask(_, ask, reply) => Some((ask, reply)),
+        Event::Ask(_, ask, _, reply) => Some((ask, reply)),
         _ => None,
     });
     assert_eq!(ask.tool.id, "t-ask");
@@ -425,6 +425,7 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     demux.open(
         Some((opened, HashMap::new())),
         None,
+        false,
         Box::new(move |e| _ = tx.send(e)),
     );
     drop(demux);
@@ -1332,6 +1333,110 @@ fn antigravity_host_mcp_handles_server_discover_and_auto_allows_mcp_prefix() {
     assert!(text.contains("Recorded."), "{text}");
     assert!(text.contains("picked allow_once"), "{text}");
     assert!(calls_rx.try_recv().is_ok());
+
+    // Spoofed title on run_command, foreign host prefix, and missing tool name must all ask.
+    for step in ["spoof-title", "foreign-host", "no-name-ask"] {
+        open.prompt(step).unwrap();
+        let mut asked_step = false;
+        let mut said_step = String::new();
+        while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
+            match e {
+                backend::Event::Ask(_, reply) => {
+                    asked_step = true;
+                    reply.send(Answer::Reject);
+                }
+                backend::Event::Update(Update::Text(t)) => said_step.push_str(&t),
+                backend::Event::Ended(..) => break,
+                _ => {}
+            }
+        }
+        assert!(asked_step, "{step} must not be auto-allowed");
+        assert!(
+            said_step.contains("picked reject_once"),
+            "{step}: {said_step}"
+        );
+    }
+}
+
+#[test]
+fn antigravity_chat_and_council_full_use_separate_processes_and_refuse_live_full_switch() {
+    let (acp, sb) = (Acp::default(), antigravity());
+    let repo = sb.dir.path().display().to_string();
+
+    let (chat_tx, chat_rx) = mpsc::channel();
+    let mut chat_spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Chat);
+    (chat_spec.trusted, chat_spec.mode) = (true, Mode::Auto.as_str().into());
+    let chat = acp
+        .start(
+            &sb.state,
+            &chat_spec,
+            None,
+            Box::new(move |e| _ = chat_tx.send(e)),
+        )
+        .unwrap();
+    let chat_opened = until(&chat_rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(option(&chat_opened.config, "mode"), Mode::Auto.as_str());
+
+    let (council_tx, council_rx) = mpsc::channel();
+    let mut council_spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Verifier);
+    (council_spec.trusted, council_spec.mode) = (true, Mode::Full.as_str().into());
+    let council = acp
+        .start(
+            &sb.state,
+            &council_spec,
+            None,
+            Box::new(move |e| _ = council_tx.send(e)),
+        )
+        .unwrap();
+    let council_opened = until(&council_rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(option(&council_opened.config, "mode"), Mode::Full.as_str());
+    assert_ne!(chat.live.adapter.pid, council.live.adapter.pid);
+
+    chat.prompt("skip-perms").unwrap();
+    assert_eq!(said(&chat_rx), "false");
+    council.prompt("skip-perms").unwrap();
+    assert_eq!(said(&council_rx), "true");
+
+    let err = chat
+        .set(Setting::Mode(Mode::Full.as_str().into()))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("only supports Full access"), "{err}");
+    chat.prompt("model").unwrap();
+    assert_eq!(said(&chat_rx), "gemini-4-neon auto");
+
+    let leave = council
+        .set(Setting::Mode(Mode::Ask.as_str().into()))
+        .unwrap_err()
+        .to_string();
+    assert!(leave.contains("cannot leave Full access"), "{leave}");
+
+    // Untrusted participants never receive the skip-permissions flag even if Full is requested.
+    let (untrusted_tx, untrusted_rx) = mpsc::channel();
+    let mut untrusted_spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Untrusted);
+    untrusted_spec.mode = Mode::Full.as_str().into();
+    let untrusted = acp
+        .start(
+            &sb.state,
+            &untrusted_spec,
+            None,
+            Box::new(move |e| _ = untrusted_tx.send(e)),
+        )
+        .unwrap();
+    let untrusted_opened = until(&untrusted_rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(option(&untrusted_opened.config, "mode"), Mode::Ask.as_str());
+    untrusted.prompt("skip-perms").unwrap();
+    assert_eq!(said(&untrusted_rx), "false");
+    assert_eq!(untrusted.live.adapter.pid, chat.live.adapter.pid);
 }
 
 #[test]

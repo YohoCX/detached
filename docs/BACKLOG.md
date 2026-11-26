@@ -4,6 +4,7 @@ Features after milestone 1, newest first.
 
 | Feature | Notes |
 | --- | --- |
+| Antigravity transcript tool outputs | Passive transcripts read `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl` and show tool calls without their outputs because `agy` logs tool results in subsequent `GENERIC` records without `tool_call_id`; match outputs reliably once the log carries call ids (or with a dedicated parser). |
 | Browser for agents (idea) | Detached starts Chrome or Chromium on its own profile and drives it over CDP; agents get open, screenshot, click, type, console and failed requests through Detached's own MCP, localhost first, trusted repos only, never in a Council on untrusted code. A process's URL opens in it. An element picker puts the clicked element's HTML, styles and selector into the composer. Its screenshots draw inline in the chat. An in-window tab over `wry` only if a separate window proves not enough: gpui-kit has no web view. |
 | Dock badge (idea) | The count of chats waiting for an answer or done unseen on the Dock icon; the system notification for them exists already. |
 | Restart an exited agent (idea) | A Restart chip on a chat whose agent exited or crashed: the same agent, folder and settings, resumed. |

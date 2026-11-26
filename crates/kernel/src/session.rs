@@ -670,9 +670,7 @@ impl Session {
     fn ready(&mut self, cx: &mut Context<Self>) {
         (self.state, self.history) = (State::Idle, self.items.len());
         for setting in std::mem::take(&mut self.picked) {
-            if let Err(e) = self.set(setting) {
-                self.fail(e.to_string());
-            }
+            let _ = self.set(setting);
         }
         if let Some(text) = self.queued.take() {
             self.prompt(text, cx);
@@ -913,12 +911,21 @@ impl Session {
             .open
             .as_ref()
             .ok_or(Error::Other("The session is not open".into()))?;
-        o.set(setting.clone())?;
+        if let Err(e) = o.set(setting.clone()) {
+            self.note(e.to_string());
+            self.refused = true;
+            return Err(e);
+        }
         match setting {
             Setting::Model(m) => {
                 let auto = Model::find(&self.models, &m).is_some_and(|m| m.auto);
-                if self.spec.mode == AUTO && auto {
-                    o.set(Setting::Mode(AUTO.into()))?;
+                if self.spec.mode == AUTO
+                    && auto
+                    && let Err(e) = o.set(Setting::Mode(AUTO.into()))
+                {
+                    self.note(e.to_string());
+                    self.refused = true;
+                    return Err(e);
                 }
             }
             Setting::Mode(m) => self.spec.mode = m,

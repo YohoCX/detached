@@ -49,6 +49,10 @@ the decision's choices are open and marked where they land: the history source (
 Claude's `min_cli` lives (§3), the label (§2) and the letter with the Commercial Terms (H12); the
 ACP stack ships while Codex is off (§1, H3). H2, H3, H4 and H6 carry their own status.**
 
+**Status (2026-11-25): Antigravity ACP (`agy acp`, built-in ACP CLI with no external adapter) and
+unified provider modes/efforts/tool verbs are built on `antigravity-acp`
+([decision](docs/decisions/2026-11-25-antigravity-acp.md)).**
+
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09), for Claude replaced on 2026-11-16;
 - Claude's direct connection behind the standard interface (2026-11-16);

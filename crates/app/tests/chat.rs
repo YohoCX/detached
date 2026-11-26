@@ -3390,12 +3390,10 @@ fn antigravity_chat_uses_unified_access_labels_and_thought_level(cx: &mut TestAp
     say(cx, "say hello");
     wait_for_item(cx, "hello");
     idle(cx);
-    // Models do not carry Claude's `(no auto)` marker.
     cx.click("chat.model");
     assert!(menu_item(cx, "Gemini 4 Neon").is_some());
     assert!(menu_item(cx, "Gemini 4 Neon (no auto)").is_none());
     cx.press("escape");
-    // Unified Claude access labels and unified effort labels (`xhigh` -> `Extra`).
     pick(cx, "chat.mode", "Edits");
     wait_until(cx, |cx| {
         description(cx, "chat.mode").as_deref() == Some("Edits")

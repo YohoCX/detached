@@ -22,7 +22,6 @@ pub enum Name {
     Direct,
 }
 
-/// Canonical permission mode above the backend seam; each provider maps to its own wire ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Auto,
@@ -43,7 +42,6 @@ impl Mode {
         }
     }
 
-    /// Unified access label shown across all providers (Claude's access vocabulary).
     pub const fn label(self) -> &'static str {
         match self {
             Mode::Auto => "Auto",
@@ -54,7 +52,7 @@ impl Mode {
         }
     }
 
-    /// Parses canonical mode IDs as well as legacy provider wire IDs stored in settings.json.
+    /// Accepts canonical ids and legacy provider wire ids saved before unification.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "auto" | "agent" => Some(Mode::Auto),
@@ -67,7 +65,6 @@ impl Mode {
     }
 }
 
-/// Human label for a canonical effort/thinking value.
 pub fn effort_label(effort: &str) -> String {
     match effort {
         "minimal" => "Minimal".into(),
@@ -85,7 +82,6 @@ pub fn effort_label(effort: &str) -> String {
     }
 }
 
-/// Unified label for a tool call's kind across Direct and ACP providers.
 pub fn tool_label(kind: &str) -> &str {
     match kind {
         "execute" | "Bash" => "Run",
@@ -717,6 +713,13 @@ mod tests {
         assert_eq!(CLAUDE.wire_mode("ask"), Some("default"));
         assert_eq!(CODEX.wire_mode("ask"), Some("read-only"));
         assert_eq!(ANTIGRAVITY.wire_mode("ask"), Some("default"));
+        assert_eq!(ANTIGRAVITY.wire_mode("full"), None);
+        assert_eq!(
+            ANTIGRAVITY.full_flag(),
+            Some("--dangerously-skip-permissions")
+        );
+        assert_eq!(CLAUDE.wire_mode("full"), Some("bypassPermissions"));
+        assert_eq!(CODEX.wire_mode("full"), Some("agent-full-access"));
         assert_eq!(CODEX.canonical_mode("agent"), "auto");
         assert_eq!(ANTIGRAVITY.canonical_mode("accept-edits"), "edits");
 

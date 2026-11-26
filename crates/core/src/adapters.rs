@@ -110,6 +110,19 @@ pub enum DeletePolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FullMode {
+    Wire(&'static str),
+    CliFlag(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostToolMatch {
+    None,
+    InputServer,
+    NamePrefix,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModeSpec {
     pub mode: backend::Mode,
     pub wire: &'static str,
@@ -134,10 +147,9 @@ pub struct Provider {
     pub env: &'static [&'static str],
     /// The files a session loads only once their items are trusted, as globs from a tree's root.
     pub trust: &'static [&'static str],
-    /// The modes a chat offers, using canonical Mode labels with provider-specific wire IDs.
     pub modes: &'static [ModeSpec],
-    /// Wire ID for `Mode::Full` (trusted council runs).
-    pub full_wire: &'static str,
+    pub full: FullMode,
+    pub host_tool: HostToolMatch,
 }
 
 impl Provider {
@@ -173,6 +185,13 @@ impl Provider {
         }
     }
 
+    pub const fn full_flag(&self) -> Option<&'static str> {
+        match self.full {
+            FullMode::CliFlag(flag) => Some(flag),
+            FullMode::Wire(_) => None,
+        }
+    }
+
     pub fn mode(&self, id: &str) -> Option<&'static ModeSpec> {
         let want = backend::Mode::parse(id)?;
         self.modes.iter().find(|m| m.mode == want)
@@ -183,14 +202,17 @@ impl Provider {
         if let Some(m) = self.modes.iter().find(|m| m.mode == want) {
             return Some(m.wire);
         }
-        (want == backend::Mode::Full).then_some(self.full_wire)
+        match (want, self.full) {
+            (backend::Mode::Full, FullMode::Wire(wire)) => Some(wire),
+            _ => None,
+        }
     }
 
     pub fn canonical_mode(&self, wire: &str) -> String {
         if let Some(m) = self.modes.iter().find(|m| m.wire == wire) {
             return m.mode.as_str().into();
         }
-        if wire == self.full_wire {
+        if matches!(self.full, FullMode::Wire(w) if w == wire) {
             return backend::Mode::Full.as_str().into();
         }
         backend::Mode::parse(wire).map_or_else(|| wire.into(), |m| m.as_str().into())
@@ -261,7 +283,8 @@ pub static CLAUDE: Provider = Provider {
             about: "Anything that needs approval asks you",
         },
     ],
-    full_wire: "bypassPermissions",
+    full: FullMode::Wire("bypassPermissions"),
+    host_tool: HostToolMatch::None,
 };
 
 pub static CODEX: Provider = Provider {
@@ -301,7 +324,8 @@ pub static CODEX: Provider = Provider {
             about: "Any file and the network, without asking",
         },
     ],
-    full_wire: "agent-full-access",
+    full: FullMode::Wire("agent-full-access"),
+    host_tool: HostToolMatch::InputServer,
 };
 
 pub static ANTIGRAVITY: Provider = Provider {
@@ -322,7 +346,7 @@ pub static ANTIGRAVITY: Provider = Provider {
         "HTTPS_PROXY",
         "NO_PROXY",
     ],
-    trust: &[".agents/**", ".agent/**"],
+    trust: &[".agents/**", ".agent/**", "_agents/**", "_agent/**"],
     modes: &[
         ModeSpec {
             mode: backend::Mode::Auto,
@@ -345,7 +369,8 @@ pub static ANTIGRAVITY: Provider = Provider {
             about: "Asks before edits and commands, per your permission settings",
         },
     ],
-    full_wire: "auto",
+    full: FullMode::CliFlag("--dangerously-skip-permissions"),
+    host_tool: HostToolMatch::NamePrefix,
 };
 
 pub static PROVIDERS: [&Provider; 3] = [&CLAUDE, &CODEX, &ANTIGRAVITY];

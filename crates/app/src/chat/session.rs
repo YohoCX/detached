@@ -348,8 +348,7 @@ impl Chat {
         }
         if let Some(s) = self.live(cx) {
             s.update(cx, |s, cx| {
-                if let Err(e) = s.set(setting) {
-                    s.fail(e.to_string());
+                if s.set(setting).is_err() {
                     cx.notify();
                 }
             });

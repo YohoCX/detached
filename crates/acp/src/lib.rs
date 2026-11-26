@@ -15,7 +15,9 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_receive_request};
-use detached_core::adapters::{self, ANTIGRAVITY, BLOCK, CODEX, Cli, Launch, Provider, RepoTrust};
+use detached_core::adapters::{
+    self, ANTIGRAVITY, BLOCK, CODEX, Cli, HostToolMatch, Launch, Provider, RepoTrust,
+};
 use detached_core::backend::{
     self, Account, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Mode, Model, Opened,
     Past, Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
@@ -163,11 +165,13 @@ impl Acp {
             let name = format!("detached-host-{}", &backend::random()[..8]);
             (name, r.url.clone())
         });
+        let full_by_flag = wants_full_flag(spec).is_some();
         let options = Options {
             cwd: spec.repo.clone().into(),
             config: config_of(spec),
             server,
             validate_choices: spec.validate_choices,
+            full_by_flag,
         };
         let opened = match resume {
             Some(id) => live.adapter.load_session(id, &options),
@@ -188,7 +192,10 @@ impl Acp {
         let id = opened.as_ref().map(|(o, _)| o.id.as_str()).or(resume);
         let id = id.unwrap_or_default().to_string();
         let host = options.server.map(|s| s.0);
-        live.demux.lock().unwrap().open(opened, host, events);
+        live.demux
+            .lock()
+            .unwrap()
+            .open(opened, host, full_by_flag, events);
         _ = ends.set((Arc::downgrade(&live), id.clone()));
         if route.as_ref().is_some_and(|r| r.breached()) {
             live.end(&id);
@@ -197,11 +204,12 @@ impl Acp {
             live,
             id,
             provider: p,
+            full_by_flag,
             _route: route,
         })
     }
 
-    /// Selects an adapter (or built-in ACP CLI) and checks its CLI.
+    /// Selects an adapter or built-in ACP CLI and checks its CLI.
     fn adapter(&self, core: &AppState, spec: &Spec) -> Result<(Arc<Live>, Option<String>)> {
         let p = spec.provider;
         let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
@@ -213,7 +221,7 @@ impl Acp {
         let catalog = adapters::stored(&core.data_dir);
         let has = adapters::cli_version_until(p, &cli, &env, spec.open_deadline)?;
         let mut vars = proc::env(p.env, proc::parent(&env));
-        let (program, args, verdict) = match p.launch {
+        let (program, mut args, verdict) = match p.launch {
             Launch::AcpAdapter { name, cli_var } => {
                 let version = adapters::installed(&core.data_dir, name)
                     .current
@@ -232,6 +240,9 @@ impl Acp {
                 return Err(Error::Other(format!("{} is not an ACP provider", p.name)));
             }
         };
+        if let Some(flag) = wants_full_flag(spec) {
+            args.push(flag.into());
+        }
         let note = match verdict {
             Cli::Ok => None,
             Cli::Old(need) => {
@@ -300,15 +311,27 @@ impl Acp {
     }
 }
 
+fn wants_full_flag(spec: &Spec) -> Option<&'static str> {
+    let flag = spec.provider.full_flag()?;
+    let full = Mode::parse(&spec.mode) == Some(Mode::Full);
+    (full && spec.kind != Kind::Untrusted && (spec.kind != Kind::Chat || spec.trusted))
+        .then_some(flag)
+}
+
 /// Mode, model and effort, set once the session starts. A Codex verifier or
 /// untrusted participant reads in Codex's own sandbox; a trusted finder takes its mode as asked.
 fn config_of(spec: &Spec) -> Vec<(String, String)> {
-    let mode = match spec.provider.id == CODEX.id && spec.kind != Kind::Chat {
-        true => Mode::Ask.as_str().to_string(),
-        false => spec.provider.canonical_mode(&spec.mode),
+    let mode = if wants_full_flag(spec).is_some() {
+        None
+    } else if (spec.provider.id == CODEX.id && spec.kind != Kind::Chat)
+        || (spec.kind == Kind::Untrusted && Mode::parse(&spec.mode) == Some(Mode::Full))
+    {
+        Some(Mode::Ask.as_str().to_string())
+    } else {
+        Some(spec.provider.canonical_mode(&spec.mode))
     };
     let set = [
-        ("mode", Some(mode)),
+        ("mode", mode),
         ("model", spec.model.clone()),
         ("effort", spec.effort.clone()),
     ];
@@ -418,7 +441,7 @@ impl Live {
         deadline: Option<Instant>,
         entry: Option<(Weak<Adapters>, Key)>,
     ) -> Result<Self> {
-        let demux: Arc<Mutex<Demux>> = Default::default();
+        let demux = Arc::new(Mutex::new(Demux::new(provider)));
         let to = demux.clone();
         let adapter = Adapter::start(provider, spec, deadline, move |e| to.lock().unwrap().got(e))?;
         Ok(Self {
@@ -492,8 +515,8 @@ impl Live {
 #[derive(Default)]
 struct SessionConfig {
     options: Vec<Config>,
-    /// Canonical option id -> provider wire option id (`effort` -> `reasoning_effort` | `thought_level`).
     wire_ids: HashMap<String, String>,
+    full_by_flag: bool,
     setting: Option<Arc<()>>,
     queue: VecDeque<Request>,
 }
@@ -519,8 +542,8 @@ enum Request {
 }
 
 /// The adapter's events, each to its session's stream.
-#[derive(Default)]
 struct Demux {
+    provider: &'static Provider,
     /// By session id, once its open was answered.
     sinks: HashMap<String, Events>,
     /// What came for an id before its open was answered: a load's replay.
@@ -532,6 +555,8 @@ struct Demux {
     /// Each session's tool calls of its turn, by id: Codex asks with the call's id alone, and sends
     /// a command's output in pieces.
     calls: HashMap<String, HashMap<String, Tool>>,
+    /// Programmatic tool names by session and call id for providers that omit `name` in asks.
+    names: HashMap<String, HashMap<String, String>>,
     /// Each session's config options as last reported, which a switch is checked against.
     configs: HashMap<String, SessionConfig>,
     /// The adapter's exit, and whether the host asked for it.
@@ -539,8 +564,26 @@ struct Demux {
 }
 
 impl Demux {
+    fn new(provider: &'static Provider) -> Self {
+        Self {
+            provider,
+            sinks: HashMap::new(),
+            early: HashMap::new(),
+            orphans: vec![],
+            hosts: HashMap::new(),
+            calls: HashMap::new(),
+            names: HashMap::new(),
+            configs: HashMap::new(),
+            exit: None,
+        }
+    }
+
     fn got(&mut self, e: Event) {
         let (id, e) = match e {
+            Event::CallName(id, call, name) => {
+                self.names.entry(id).or_default().insert(call, name);
+                return;
+            }
             Event::Update(id, Update::Tool(t)) => {
                 let calls = self.calls.entry(id.clone()).or_default();
                 let call = calls.entry(t.id.clone()).or_default();
@@ -572,28 +615,44 @@ impl Demux {
                 };
                 (id, backend::Event::Update(Update::Tool(Box::new(t))))
             }
-            Event::Config(id, c, wire_ids) => {
+            Event::Config(id, mut c, wire_ids) => {
                 if let Some(state) = self.configs.get_mut(&id) {
+                    if state.full_by_flag {
+                        pin_full(&mut c);
+                    }
                     state.options = c.clone();
                     state.wire_ids = wire_ids;
                 }
                 (id, backend::Event::Update(Update::Config(c)))
             }
-            Event::Update(id, Update::Config(c)) => {
+            Event::Update(id, Update::Config(mut c)) => {
                 if let Some(state) = self.configs.get_mut(&id) {
+                    if state.full_by_flag {
+                        pin_full(&mut c);
+                    }
                     state.options = c.clone();
                 }
                 (id, backend::Event::Update(Update::Config(c)))
             }
             Event::Update(id, u) => (id, backend::Event::Update(u)),
-            Event::Ask(id, mut ask, reply) => {
+            Event::Ask(id, mut ask, name, reply) => {
                 let t = &mut ask.tool;
                 if let Some(call) = self.calls.get(&id).and_then(|c| c.get(&t.id)) {
                     t.title = t.title.take().or(call.title.clone());
                     t.kind = t.kind.take().or(call.kind.clone());
                     t.input = t.input.take().or(call.input.clone());
                 }
-                if self.hosts.get(&id).is_some_and(|h| host(&ask, h)) {
+                let call_name = name.or_else(|| {
+                    self.names
+                        .get(&id)
+                        .and_then(|m| m.get(&ask.tool.id))
+                        .cloned()
+                });
+                if self
+                    .hosts
+                    .get(&id)
+                    .is_some_and(|h| host(self.provider, &ask, call_name.as_deref(), h))
+                {
                     return reply.send(Answer::Allow);
                 }
                 ask.key = key(&ask.tool);
@@ -601,12 +660,14 @@ impl Demux {
             }
             Event::Ended(id, r, config) => {
                 self.calls.remove(&id);
+                self.names.remove(&id);
                 (id, backend::Event::Ended(r, config))
             }
             Event::Closed(id) => {
                 self.early.remove(&id);
                 self.hosts.remove(&id);
                 self.calls.remove(&id);
+                self.names.remove(&id);
                 self.configs.remove(&id);
                 if let Some(mut sink) = self.sinks.remove(&id) {
                     sink(backend::Event::Closed);
@@ -615,6 +676,7 @@ impl Demux {
             }
             Event::Exited(x, asked) => {
                 self.calls.clear();
+                self.names.clear();
                 self.configs.clear();
                 let sinks = self.sinks.drain().map(|(_, s)| s);
                 for mut sink in sinks.chain(self.orphans.drain(..)) {
@@ -636,6 +698,7 @@ impl Demux {
         &mut self,
         opened: Option<(Opened, HashMap<String, String>)>,
         host: Option<String>,
+        full_by_flag: bool,
         mut sink: Events,
     ) {
         if let Some((x, asked)) = &self.exit {
@@ -653,6 +716,7 @@ impl Demux {
             SessionConfig {
                 options: o.config.clone(),
                 wire_ids,
+                full_by_flag,
                 ..Default::default()
             },
         );
@@ -666,17 +730,25 @@ impl Demux {
     }
 }
 
-/// Whether `ask` is for a tool of the host's server `name`: Codex puts it in `input["server"]`,
-/// Antigravity prefixes its MCP tool name with `mcp_<name>_`.
-fn host(ask: &Ask, name: &str) -> bool {
-    let by_input = ask.tool.input.as_ref().is_some_and(|i| i["server"] == name);
-    let prefix = format!("mcp_{name}_");
-    let by_title = ask
-        .tool
-        .title
-        .as_deref()
-        .is_some_and(|t| t.starts_with(&prefix) || t.contains(&format!(" {prefix}")));
-    by_input || by_title
+fn pin_full(options: &mut [Config]) {
+    if let Some(mode) = options.iter_mut().find(|c| c.id == "mode") {
+        mode.value = Mode::Full.as_str().into();
+    }
+}
+
+fn host(provider: &Provider, ask: &Ask, tool_name: Option<&str>, server: &str) -> bool {
+    match provider.host_tool {
+        HostToolMatch::None => false,
+        HostToolMatch::InputServer => ask
+            .tool
+            .input
+            .as_ref()
+            .is_some_and(|i| i["server"] == server),
+        HostToolMatch::NamePrefix => {
+            let prefix = format!("mcp_{server}_");
+            tool_name.is_some_and(|n| n.starts_with(&prefix))
+        }
+    }
 }
 
 fn gone(x: &Exit, asked: bool) -> backend::Event {
@@ -691,6 +763,7 @@ struct Open {
     live: Arc<Live>,
     id: String,
     provider: &'static Provider,
+    full_by_flag: bool,
     /// Its host tools' path, refused once the session goes.
     _route: Option<mcp::Route>,
 }
@@ -737,10 +810,29 @@ impl backend::Session for Open {
             Setting::Effort(v) => ("effort", v.clone(), v),
             Setting::Mode(v) => {
                 let canonical = self.provider.canonical_mode(&v);
+                if self.provider.full_flag().is_some() {
+                    if self.full_by_flag {
+                        if canonical == Mode::Full.as_str() {
+                            return Ok(());
+                        }
+                        return Err(Error::Other(format!(
+                            "{} cannot leave {} after the session started",
+                            self.provider.name,
+                            Mode::Full.label(),
+                        )));
+                    }
+                    if canonical == Mode::Full.as_str() {
+                        return Err(Error::Other(format!(
+                            "{} only supports {} when a session starts",
+                            self.provider.name,
+                            Mode::Full.label(),
+                        )));
+                    }
+                }
                 let wire = self
                     .provider
                     .wire_mode(&canonical)
-                    .unwrap_or(&v)
+                    .ok_or_else(|| Error::Other(format!("This agent offers no mode {canonical}")))?
                     .to_string();
                 ("mode", canonical, wire)
             }
@@ -785,21 +877,21 @@ const OUTPUT: usize = 64 * 1024;
 #[derive(Clone, Debug, Default)]
 struct Options {
     cwd: PathBuf,
-    /// Mode, model and effort, set once the session starts (canonical IDs/values).
     config: Vec<(String, String)>,
     /// The host's tools: a name and its URL.
     server: Option<(String, String)>,
     validate_choices: bool,
+    full_by_flag: bool,
 }
 
 /// What the adapter sends, by session id, in the order it sent it.
 enum Event {
     Update(String, Update),
-    /// Normalized config options and their canonical -> wire ID map.
     Config(String, Vec<Config>, HashMap<String, String>),
+    CallName(String, String, String),
     /// A piece of a command's output, by its call's id.
     Output(String, String, String),
-    Ask(String, Box<Ask>, Reply),
+    Ask(String, Box<Ask>, Option<String>, Reply),
     /// A prompt's answer: the turn ended.
     Ended(String, std::result::Result<Turn, Failure>, TurnConfig),
     /// The session's close was answered: nothing more comes for it.
@@ -881,6 +973,9 @@ impl Adapter {
                     .on_receive_notification(
                         async move |n: SessionNotification, _cx| {
                             let id = n.session_id.to_string();
+                            if let Some((call, call_name)) = tool_name(&n.update) {
+                                on_update(Event::CallName(id.clone(), call, call_name));
+                            }
                             if let Some((call, data)) = output(&n.update) {
                                 on_update(Event::Output(id.clone(), call, data));
                             }
@@ -897,6 +992,7 @@ impl Adapter {
                     .on_receive_request(
                         async move |r: RequestPermissionRequest, responder, cx| {
                             let (tx, rx) = oneshot::channel();
+                            let call_name = r.tool_call.fields.name.clone();
                             let tool =
                                 tool(r.tool_call.tool_call_id.to_string(), r.tool_call.fields);
                             let ask = Ask {
@@ -906,7 +1002,12 @@ impl Adapter {
                                 questions: vec![],
                             };
                             let reply = Reply::new(move |a| _ = tx.send(a));
-                            on_ask(Event::Ask(r.session_id.to_string(), Box::new(ask), reply));
+                            on_ask(Event::Ask(
+                                r.session_id.to_string(),
+                                Box::new(ask),
+                                call_name,
+                                reply,
+                            ));
                             let options = r.options;
                             cx.spawn(async move {
                                 let answer = rx.await.unwrap_or(Answer::Cancel);
@@ -1030,6 +1131,9 @@ impl Adapter {
                     return Err(e);
                 }
             }
+        }
+        if want.full_by_flag {
+            pin_full(&mut o.config);
         }
         Ok((o, wire_ids))
     }
@@ -1358,6 +1462,16 @@ fn update(provider: &Provider, u: SessionUpdate) -> Option<Update> {
         }
         _ => return None,
     })
+}
+
+fn tool_name(u: &SessionUpdate) -> Option<(String, String)> {
+    match u {
+        SessionUpdate::ToolCall(t) => Some((t.tool_call_id.to_string(), t.name.clone()?)),
+        SessionUpdate::ToolCallUpdate(t) => {
+            Some((t.tool_call_id.to_string(), t.fields.name.clone()?))
+        }
+        _ => None,
+    }
 }
 
 /// A piece of a command's output: Codex sends it beside the call's update, as Zed takes it.

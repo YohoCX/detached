@@ -1156,3 +1156,34 @@ fn a_link_in_codex_s_layer_refuses_a_codex_session_and_no_claude_one(cx: &mut Te
         "{why}"
     );
 }
+
+#[gpui::test]
+fn switching_antigravity_to_full_mid_session_is_refused_with_a_note(cx: &mut TestAppContext) {
+    use detached_core::adapters::ANTIGRAVITY;
+    let f = boot_fake(cx, Fake::Acp);
+    let fake = detached_acp::testutil::fake().display().to_string();
+    let mut cfg: Config = f.core.get_settings().block(BLOCK).unwrap_or_default();
+    cfg.cli.insert(ANTIGRAVITY.id.into(), fake);
+    cfg.antigravity = true;
+    f.core.set_block(BLOCK, cfg).unwrap();
+
+    let mut spec = Spec::new(&ANTIGRAVITY, &f.repo, Kind::Chat);
+    spec.mode = Mode::Auto.as_str().into();
+    let s = open_spec(spec, None, cx);
+    let err = s
+        .update(cx, |s, _| s.set(Setting::Mode(Mode::Full.as_str().into())))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("only supports Full access"), "{err}");
+    s.read_with(cx, |s, _| {
+        assert!(s.refused);
+        assert_eq!(s.option("mode"), Some(Mode::Auto.as_str()));
+        assert!(
+            s.items
+                .iter()
+                .any(|i| matches!(i, Item::Note(n) if n.contains("only supports Full access"))),
+            "{:?}",
+            s.items
+        );
+    });
+}

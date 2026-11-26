@@ -58,6 +58,7 @@ struct Session {
     mode: String,
     effort: String,
     antigravity: bool,
+    skip_permissions: bool,
     hold_close: bool,
     /// Commands a cancel leaves running.
     background: Vec<Child>,
@@ -70,6 +71,7 @@ struct Session {
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut antigravity = false;
+    let mut skip_permissions = false;
     match args.next().as_deref() {
         // A command that runs until killed.
         Some("--sleep") => loop {
@@ -86,8 +88,10 @@ fn main() {
             let _ = std::io::stdin().read_to_end(&mut vec![]);
             return;
         }
-        // Built-in ACP subcommand mode (Antigravity emulation).
-        Some("acp") => antigravity = true,
+        Some("acp") => {
+            antigravity = true;
+            skip_permissions = args.any(|a| a == "--dangerously-skip-permissions");
+        }
         _ => {}
     }
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
@@ -147,6 +151,7 @@ fn main() {
                         mode: "default".into(),
                         effort: "high".into(),
                         antigravity: true,
+                        skip_permissions,
                         ..Session::default()
                     }
                 } else {
@@ -604,37 +609,78 @@ impl Turn<'_> {
                 let _ = self.cancelled.recv();
                 return Err(Stop::Cancelled);
             }
-            "bare" | "host-ask" => {
+            "bare" | "host-ask" | "spoof-title" | "foreign-host" | "no-name-ask" => {
                 let agy = self.session(|s| s.antigravity);
-                let (title, kind, input) = match verb {
-                    "bare" => ("Run make".into(), "execute", json!({"command": "make"})),
-                    _ if agy => {
-                        let server = self.session(|s| {
-                            s.params["mcpServers"][0]["name"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string()
-                        });
-                        (
-                            format!("Run mcp_{server}_detached_act"),
-                            "other",
-                            json!({"action": "done"}),
-                        )
-                    }
-                    _ => {
-                        let server = self.session(|s| s.params["mcpServers"][0]["name"].clone());
-                        (
-                            "Run make".into(),
-                            "execute",
-                            json!({"server": server, "tool": "detached_act", "arguments": {}}),
-                        )
-                    }
+                let server = self.session(|s| {
+                    s.params["mcpServers"][0]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
+                });
+                let (title, name, kind, input, ask_name): (
+                    String,
+                    Option<String>,
+                    &str,
+                    Value,
+                    Option<String>,
+                ) = match verb {
+                    "bare" => (
+                        "Run make".into(),
+                        None,
+                        "execute",
+                        json!({"command": "make"}),
+                        None,
+                    ),
+                    "spoof-title" => (
+                        format!("Run mcp_{server}_detached_act"),
+                        Some("run_command".into()),
+                        "execute",
+                        json!({"command": format!("echo mcp_{server}_detached_act")}),
+                        Some("run_command".into()),
+                    ),
+                    "foreign-host" => (
+                        "Run mcp_other-host-12345678_detached_act".into(),
+                        Some("mcp_other-host-12345678_detached_act".into()),
+                        "other",
+                        json!({"action": "done"}),
+                        Some("mcp_other-host-12345678_detached_act".into()),
+                    ),
+                    "no-name-ask" => (
+                        format!("Run mcp_{server}_detached_act"),
+                        None,
+                        "other",
+                        json!({"action": "done"}),
+                        None,
+                    ),
+                    _ if agy => (
+                        format!("Run mcp_{server}_detached_act"),
+                        Some(format!("mcp_{server}_detached_act")),
+                        "other",
+                        json!({"action": "done"}),
+                        None,
+                    ),
+                    _ => (
+                        "Run make".into(),
+                        None,
+                        "execute",
+                        json!({"server": server, "tool": "detached_act", "arguments": {}}),
+                        None,
+                    ),
                 };
-                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": "t-bare",
-                    "title": title, "kind": kind, "status": "in_progress", "rawInput": input}));
-                let tool = json!({"toolCallId": "t-bare", "kind": kind, "status": "pending"});
+                let mut call = json!({"sessionUpdate": "tool_call", "toolCallId": "t-bare",
+                    "title": title, "kind": kind, "status": "in_progress", "rawInput": input});
+                if let Some(name) = name {
+                    call["name"] = json!(name);
+                }
+                self.update(call);
+                let mut tool = json!({"toolCallId": "t-bare", "kind": kind, "status": "pending"});
+                if let Some(ask_name) = ask_name {
+                    tool["name"] = json!(ask_name);
+                }
                 self.say(&format!("picked {}", self.ask(tool)?));
             }
+            "skip-perms" => self.say(&self.session(|s| s.skip_permissions.to_string())),
+            "pid" => self.say(&std::process::id().to_string()),
             "diff" => {
                 self.update(json!({
                     "sessionUpdate": "tool_call",
