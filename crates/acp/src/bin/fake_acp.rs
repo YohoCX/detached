@@ -57,6 +57,8 @@ struct Session {
     model: String,
     mode: String,
     effort: String,
+    antigravity: bool,
+    skip_permissions: bool,
     hold_close: bool,
     /// Commands a cancel leaves running.
     background: Vec<Child>,
@@ -68,6 +70,8 @@ struct Session {
 
 fn main() {
     let mut args = std::env::args().skip(1);
+    let mut antigravity = false;
+    let mut skip_permissions = false;
     match args.next().as_deref() {
         // A command that runs until killed.
         Some("--sleep") => loop {
@@ -83,6 +87,10 @@ fn main() {
         Some("--child") => {
             let _ = std::io::stdin().read_to_end(&mut vec![]);
             return;
+        }
+        Some("acp") => {
+            antigravity = true;
+            skip_permissions = args.any(|a| a == "--dangerously-skip-permissions");
         }
         _ => {}
     }
@@ -130,13 +138,32 @@ fn main() {
                         format!("{:08x}-0000-4000-8000-{next:012x}", std::process::id())
                     }
                 };
-                let s = Session {
-                    cwd: params["cwd"].as_str().unwrap_or_default().into(),
-                    params: params.clone(),
-                    model: if load { "gpt-5.5-mini" } else { "gpt-5.5" }.into(),
-                    mode: "agent".into(),
-                    effort: "medium".into(),
-                    ..Session::default()
+                let s = if antigravity {
+                    Session {
+                        cwd: params["cwd"].as_str().unwrap_or_default().into(),
+                        params: params.clone(),
+                        model: if load {
+                            "gemini-3.8-flash"
+                        } else {
+                            "gemini-4-neon"
+                        }
+                        .into(),
+                        mode: "default".into(),
+                        effort: "high".into(),
+                        antigravity: true,
+                        skip_permissions,
+                        ..Session::default()
+                    }
+                } else {
+                    Session {
+                        cwd: params["cwd"].as_str().unwrap_or_default().into(),
+                        params: params.clone(),
+                        model: if load { "gpt-5.5-mini" } else { "gpt-5.5" }.into(),
+                        mode: "agent".into(),
+                        effort: "medium".into(),
+                        antigravity: false,
+                        ..Session::default()
+                    }
                 };
                 let git = PathBuf::from(&s.cwd).join(".git");
                 if let Ok(gate) = OpenOptions::new()
@@ -148,7 +175,8 @@ fn main() {
                 }
                 if !load {
                     listed(|all| all.push(json!({"sessionId": sid, "cwd": s.cwd})));
-                    if let Some(path) = rollout(&sid, "sessions")
+                    if !antigravity
+                        && let Some(path) = rollout(&sid, "sessions")
                         && path.parent().is_some_and(|p| fs::create_dir_all(p).is_ok())
                     {
                         let meta =
@@ -161,6 +189,10 @@ fn main() {
                 let home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
                 if method == "session/new" {
                     let mut opened = json!({"sessionId": sid});
+                    if antigravity {
+                        opened["_meta"] =
+                            json!({"antigravity": {"tier": {"name": "Google AI Pro"}}});
+                    }
                     if !home
                         .as_ref()
                         .is_some_and(|p| p.join("fake-no-config").exists())
@@ -220,6 +252,13 @@ fn main() {
                 reply(json!({"sessions": mine.collect::<Vec<_>>()}));
             }
             "session/delete" => {
+                if antigravity {
+                    send(
+                        &out,
+                        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found: session/delete"}}),
+                    );
+                    continue;
+                }
                 let sid = params["sessionId"].as_str().unwrap_or_default();
                 listed(|all| {
                     for s in all.iter_mut().filter(|s| s["sessionId"] == sid) {
@@ -239,18 +278,27 @@ fn main() {
                 let mut all = sessions.lock().unwrap();
                 let Some(s) = all.get_mut(sid) else { continue };
                 let v = params["value"].as_str().unwrap_or_default().to_string();
-                match params["configId"].as_str() {
-                    Some("model") if v == "die" => {
+                match (params["configId"].as_str(), s.antigravity) {
+                    (Some("model"), _) if v == "die" => {
                         eprintln!("fake_acp: died at its model");
                         std::process::exit(3);
                     }
                     // It lists `workspace-write` and refuses it, as an agent may.
-                    Some("mode") if MODES.contains(&v.as_str()) && v != "workspace-write" => {
+                    (Some("mode"), false)
+                        if MODES.contains(&v.as_str()) && v != "workspace-write" =>
+                    {
                         s.mode = v
                     }
-                    Some("model") if MODELS.iter().any(|m| m.0 == v) => s.model = v,
-                    Some("reasoning_effort")
+                    (Some("mode"), true) if AGY_MODES.contains(&v.as_str()) => s.mode = v,
+                    (Some("model"), false) if MODELS.iter().any(|m| m.0 == v) => s.model = v,
+                    (Some("model"), true) if AGY_MODELS.iter().any(|m| m.0 == v) => s.model = v,
+                    (Some("reasoning_effort"), false)
                         if !s.effort.is_empty() && EFFORTS.contains(&v.as_str()) =>
+                    {
+                        s.effort = v
+                    }
+                    (Some("thought_level"), true)
+                        if !s.effort.is_empty() && AGY_EFFORTS.contains(&v.as_str()) =>
                     {
                         s.effort = v
                     }
@@ -367,14 +415,20 @@ fn next_request(next: &mut u64) -> u64 {
 }
 
 const MODES: &[&str] = &["read-only", "workspace-write", "agent", "agent-full-access"];
+const AGY_MODES: &[&str] = &["default", "accept-edits", "auto", "plan"];
 /// Each model's value and name.
 const MODELS: &[(&str, &str)] = &[
     ("gpt-5.5", "GPT-5.5"),
     ("gpt-5.5-mini", "GPT-5.5 mini"),
     ("die", "Die"),
 ];
+const AGY_MODELS: &[(&str, &str)] = &[
+    ("gemini-4-neon", "Gemini 4 Neon"),
+    ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+];
 
 const EFFORTS: &[&str] = &["low", "medium", "high"];
+const AGY_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
 /// The host's line for a woken turn.
 const WAKE: &str = "You have new messages";
 
@@ -400,20 +454,40 @@ fn listed(f: impl FnOnce(&mut Vec<Value>)) {
 }
 
 fn config(s: &Session) -> Value {
-    let select = |id: &str, value: &str, values: &[(&str, &str)]| {
+    let select = |id: &str, category: Option<&str>, value: &str, values: &[(&str, &str)]| {
         let options: Vec<Value> = values
             .iter()
             .map(|(v, name)| json!({"value": v, "name": name}))
             .collect();
-        json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
+        let mut obj = json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options});
+        if let Some(category) = category {
+            obj["category"] = json!(category);
+        }
+        obj
     };
     let pairs = |all: &[&'static str]| all.iter().map(|m| (*m, *m)).collect::<Vec<_>>();
+    let (modes, models, effort_id, effort_cat, efforts) = if s.antigravity {
+        (
+            AGY_MODES,
+            AGY_MODELS,
+            "thought_level",
+            Some("thought_level"),
+            AGY_EFFORTS,
+        )
+    } else {
+        (MODES, MODELS, "reasoning_effort", None, EFFORTS)
+    };
     let mut options = vec![
-        select("mode", &s.mode, &pairs(MODES)),
-        select("model", &s.model, MODELS),
+        select(
+            "mode",
+            s.antigravity.then_some("mode"),
+            &s.mode,
+            &pairs(modes),
+        ),
+        select("model", s.antigravity.then_some("model"), &s.model, models),
     ];
     if !s.effort.is_empty() {
-        options.push(select("reasoning_effort", &s.effort, &pairs(EFFORTS)));
+        options.push(select(effort_id, effort_cat, &s.effort, &pairs(efforts)));
     }
     Value::from(options)
 }
@@ -535,18 +609,92 @@ impl Turn<'_> {
                 let _ = self.cancelled.recv();
                 return Err(Stop::Cancelled);
             }
-            "bare" | "host-ask" => {
-                let input = match verb {
-                    "bare" => json!({"command": "make"}),
-                    _ => {
-                        let server = self.session(|s| s.params["mcpServers"][0]["name"].clone());
-                        json!({"server": server, "tool": "detached_act", "arguments": {}})
-                    }
+            "bare" | "host-ask" | "spoof-title" | "foreign-host" | "no-name-ask" => {
+                let agy = self.session(|s| s.antigravity);
+                let server = self.session(|s| {
+                    s.params["mcpServers"][0]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
+                });
+                let (title, name, kind, input, ask_name): (
+                    String,
+                    Option<String>,
+                    &str,
+                    Value,
+                    Option<String>,
+                ) = match verb {
+                    "bare" => (
+                        "Run make".into(),
+                        None,
+                        "execute",
+                        json!({"command": "make"}),
+                        None,
+                    ),
+                    "spoof-title" => (
+                        format!("Run mcp_{server}_detached_act"),
+                        Some("run_command".into()),
+                        "execute",
+                        json!({"command": format!("echo mcp_{server}_detached_act")}),
+                        Some("run_command".into()),
+                    ),
+                    "foreign-host" => (
+                        "Run mcp_other-host-12345678_detached_act".into(),
+                        Some("mcp_other-host-12345678_detached_act".into()),
+                        "other",
+                        json!({"action": "done"}),
+                        Some("mcp_other-host-12345678_detached_act".into()),
+                    ),
+                    "no-name-ask" => (
+                        format!("Run mcp_{server}_detached_act"),
+                        None,
+                        "other",
+                        json!({"action": "done"}),
+                        None,
+                    ),
+                    _ if agy => (
+                        format!("Run mcp_{server}_detached_act"),
+                        Some(format!("mcp_{server}_detached_act")),
+                        "other",
+                        json!({"action": "done"}),
+                        None,
+                    ),
+                    _ => (
+                        "Run make".into(),
+                        None,
+                        "execute",
+                        json!({"server": server, "tool": "detached_act", "arguments": {}}),
+                        None,
+                    ),
                 };
-                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": "t-bare",
-                    "title": "Run make", "kind": "execute", "status": "in_progress", "rawInput": input}));
-                let tool = json!({"toolCallId": "t-bare", "kind": "execute", "status": "pending"});
+                let mut call = json!({"sessionUpdate": "tool_call", "toolCallId": "t-bare",
+                    "title": title, "kind": kind, "status": "in_progress", "rawInput": input});
+                if let Some(name) = name {
+                    call["name"] = json!(name);
+                }
+                self.update(call);
+                let mut tool = json!({"toolCallId": "t-bare", "kind": kind, "status": "pending"});
+                if let Some(ask_name) = ask_name {
+                    tool["name"] = json!(ask_name);
+                }
                 self.say(&format!("picked {}", self.ask(tool)?));
+            }
+            "skip-perms" => self.say(&self.session(|s| s.skip_permissions.to_string())),
+            "pid" => self.say(&std::process::id().to_string()),
+            "diff" => {
+                self.update(json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "t-diff",
+                    "title": "Edit notes.txt",
+                    "kind": "edit",
+                    "status": "completed",
+                    "content": [{
+                        "type": "diff",
+                        "path": "/tmp/notes.txt",
+                        "oldText": "one\ntwo\n",
+                        "newText": "one\ntwo\nthree\nfour\n"
+                    }]
+                }));
             }
             "ask" => {
                 let mut tool =
@@ -627,13 +775,13 @@ impl Turn<'_> {
                 std::fs::write(path, text).map_err(err)?;
             }
             "act" => {
-                let (url, mcp) = self.session(|s| {
+                let (url, mcp, agy) = self.session(|s| {
                     let url = s.params["mcpServers"][0]["url"]
                         .as_str()
                         .unwrap_or_default();
-                    (url.to_string(), s.mcp.clone())
+                    (url.to_string(), s.mcp.clone(), s.antigravity)
                 });
-                let (mcp, said) = act(&url, mcp, rest).map_err(err)?;
+                let (mcp, said) = act(&url, mcp, agy, rest).map_err(err)?;
                 self.sessions.lock().unwrap().get_mut(self.sid).unwrap().mcp = mcp;
                 self.say(&said);
             }
@@ -658,8 +806,24 @@ fn err(e: impl std::fmt::Display) -> Stop {
 
 /// Calls `detached_act` with `args` on the MCP server at `url`, on the session `mcp` or one an
 /// `initialize` answers with: that session and the call's answer.
-fn act(url: &str, mcp: Option<String>, args: &str) -> std::io::Result<(Option<String>, String)> {
+fn act(
+    url: &str,
+    mcp: Option<String>,
+    discover_first: bool,
+    args: &str,
+) -> std::io::Result<(Option<String>, String)> {
     let args: Value = serde_json::from_str(args).map_err(std::io::Error::other)?;
+    if mcp.is_none() && discover_first {
+        let discover =
+            json!({"jsonrpc": "2.0", "id": 0, "method": "server/discover", "params": {}});
+        let (_, body) = post(url, None, &discover)?;
+        let r: Value = serde_json::from_str(&body).map_err(std::io::Error::other)?;
+        if r["error"]["code"] != -32601 {
+            return Err(std::io::Error::other(format!(
+                "unexpected discover reply: {body}"
+            )));
+        }
+    }
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18"}});
     let mcp = match mcp {

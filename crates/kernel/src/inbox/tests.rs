@@ -261,7 +261,7 @@ fn a_receiver_in_auto_is_woken_asking_and_auto_is_back_after_the_turn(cx: &mut T
     let from = b.read_with(cx, |s, _| s.items.len());
     turn(&a, &send(&y, "go"), cx);
     let at = waiting(&b, from, cx);
-    assert_eq!(cx.read(mode).as_deref(), Some("default"));
+    assert_eq!(cx.read(mode).as_deref(), Some("ask"));
     b.update(cx, |s, cx| s.answer(at, Answer::Once, cx));
     settled(&[&a, &b], cx);
     wait_until(cx, |cx| mode(cx).as_deref() == Some("auto"));
@@ -515,7 +515,7 @@ fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
     use detached_core::adapters::{BLOCK, CODEX, Config};
     let f = boot(cx);
     let fake = detached_acp::testutil::fake();
-    detached_acp::testutil::install_as(&f.core, CODEX.adapter, &fake, "2.6.0");
+    detached_acp::testutil::install_as(&f.core, CODEX.adapter().unwrap(), &fake, "2.6.0");
     let config = Config {
         cli: [
             (CLAUDE.id.into(), claude::fake().display().to_string()),
@@ -528,7 +528,7 @@ fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
     f.core.set_block(BLOCK, config).unwrap();
     let (a, x) = open(&f, "default", "say here", cx);
     let mut spec = Spec::new(&CODEX, &f.repo, Kind::Chat);
-    spec.mode = CODEX.chat.into();
+    spec.mode = detached_core::backend::Mode::Auto.as_str().into();
     let b = cx.update(|cx| Session::open(spec, None, cx));
     wait_for(cx, Duration::from_secs(60), |cx| {
         b.read(cx).state == State::Idle
@@ -541,7 +541,7 @@ fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
     settled(&[&a, &b], cx);
     assert_eq!(said_since_woken(&b, cx), "gpt-5.5 read-only");
     let mode = |cx: &App| b.read(cx).option("mode").map(String::from);
-    wait_until(cx, |cx| mode(cx).as_deref() == Some("agent"));
+    wait_until(cx, |cx| mode(cx).as_deref() == Some("auto"));
     b.read_with(cx, |s, _| {
         let notes = s
             .items

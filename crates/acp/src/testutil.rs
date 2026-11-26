@@ -14,7 +14,7 @@ pub fn fake() -> PathBuf {
 
 /// `fake_acp` as Codex's adapter at `version`, the current one; the one before is kept.
 pub fn install(core: &AppState, version: &str) {
-    install_as(core, CODEX.adapter, &fake(), version);
+    install_as(core, CODEX.adapter().unwrap(), &fake(), version);
 }
 
 /// `program` as the adapter `name` at `version`, the current one; the one before is kept.

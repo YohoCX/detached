@@ -22,6 +22,82 @@ pub enum Name {
     Direct,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Auto,
+    Edits,
+    Plan,
+    Ask,
+    Full,
+}
+
+impl Mode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Mode::Auto => "auto",
+            Mode::Edits => "edits",
+            Mode::Plan => "plan",
+            Mode::Ask => "ask",
+            Mode::Full => "full",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Mode::Auto => "Auto",
+            Mode::Edits => "Edits",
+            Mode::Plan => "Plan",
+            Mode::Ask => "Manual",
+            Mode::Full => "Full access",
+        }
+    }
+
+    /// Accepts canonical ids and legacy provider wire ids saved before unification.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "auto" | "agent" => Some(Mode::Auto),
+            "edits" | "acceptEdits" | "accept-edits" | "workspace-write" => Some(Mode::Edits),
+            "plan" => Some(Mode::Plan),
+            "ask" | "default" | "read-only" => Some(Mode::Ask),
+            "full" | "bypassPermissions" | "agent-full-access" => Some(Mode::Full),
+            _ => None,
+        }
+    }
+}
+
+pub fn effort_label(effort: &str) -> String {
+    match effort {
+        "minimal" => "Minimal".into(),
+        "low" => "Low".into(),
+        "medium" => "Medium".into(),
+        "high" => "High".into(),
+        "xhigh" => "Extra".into(),
+        "max" => "Max".into(),
+        other => {
+            let mut chars = other.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().to_string() + chars.as_str()
+            })
+        }
+    }
+}
+
+pub fn tool_label(kind: &str) -> &str {
+    match kind {
+        "execute" | "Bash" => "Run",
+        "read" | "Read" => "Read",
+        "edit" | "Edit" | "MultiEdit" => "Edit",
+        "Write" => "Write",
+        "delete" => "Delete",
+        "move" => "Move",
+        "search" | "Grep" | "Glob" | "WebSearch" => "Search",
+        "fetch" | "WebFetch" => "Fetch",
+        "think" => "Think",
+        "other" => "Tool",
+        other => other,
+    }
+}
+
 /// Claude's backend: the user's own `claude`, one per session.
 pub fn direct() -> &'static dyn Backend {
     crate::claude::backend()
@@ -194,7 +270,7 @@ impl Spec {
             repo: repo.into(),
             kind,
             trusted: false,
-            mode: provider.ask.into(),
+            mode: Mode::Ask.as_str().into(),
             model: None,
             effort: None,
             validate_choices: false,
@@ -601,5 +677,61 @@ mod tests {
     fn the_app_does_not_depend_on_the_acp_crate() {
         let toml = std::fs::read_to_string(crates().join("app/Cargo.toml")).unwrap();
         assert!(!toml.contains("detached-acp") && !toml.contains("../acp"));
+    }
+
+    #[test]
+    fn modes_efforts_and_tool_labels_unify_across_providers() {
+        use super::{Mode, effort_label, tool_label};
+        use crate::adapters::{ANTIGRAVITY, CLAUDE, CODEX};
+
+        for (raw, want) in [
+            ("auto", Mode::Auto),
+            ("agent", Mode::Auto),
+            ("edits", Mode::Edits),
+            ("acceptEdits", Mode::Edits),
+            ("accept-edits", Mode::Edits),
+            ("workspace-write", Mode::Edits),
+            ("plan", Mode::Plan),
+            ("ask", Mode::Ask),
+            ("default", Mode::Ask),
+            ("read-only", Mode::Ask),
+            ("full", Mode::Full),
+            ("bypassPermissions", Mode::Full),
+            ("agent-full-access", Mode::Full),
+        ] {
+            assert_eq!(Mode::parse(raw), Some(want), "{raw}");
+        }
+        assert_eq!(Mode::Auto.label(), "Auto");
+        assert_eq!(Mode::Edits.label(), "Edits");
+        assert_eq!(Mode::Plan.label(), "Plan");
+        assert_eq!(Mode::Ask.label(), "Manual");
+        assert_eq!(Mode::Full.label(), "Full access");
+
+        assert_eq!(CLAUDE.wire_mode("edits"), Some("acceptEdits"));
+        assert_eq!(CODEX.wire_mode("edits"), Some("workspace-write"));
+        assert_eq!(ANTIGRAVITY.wire_mode("edits"), Some("accept-edits"));
+        assert_eq!(CLAUDE.wire_mode("ask"), Some("default"));
+        assert_eq!(CODEX.wire_mode("ask"), Some("read-only"));
+        assert_eq!(ANTIGRAVITY.wire_mode("ask"), Some("default"));
+        assert_eq!(ANTIGRAVITY.wire_mode("full"), None);
+        assert_eq!(
+            ANTIGRAVITY.full_flag(),
+            Some("--dangerously-skip-permissions")
+        );
+        assert_eq!(CLAUDE.wire_mode("full"), Some("bypassPermissions"));
+        assert_eq!(CODEX.wire_mode("full"), Some("agent-full-access"));
+        assert_eq!(CODEX.canonical_mode("agent"), "auto");
+        assert_eq!(ANTIGRAVITY.canonical_mode("accept-edits"), "edits");
+
+        assert_eq!(effort_label("low"), "Low");
+        assert_eq!(effort_label("xhigh"), "Extra");
+        assert_eq!(effort_label("max"), "Max");
+
+        assert_eq!(tool_label("Bash"), "Run");
+        assert_eq!(tool_label("execute"), "Run");
+        assert_eq!(tool_label("Edit"), "Edit");
+        assert_eq!(tool_label("edit"), "Edit");
+        assert_eq!(tool_label("Read"), "Read");
+        assert_eq!(tool_label("read"), "Read");
     }
 }

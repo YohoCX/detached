@@ -35,12 +35,12 @@ fn spec(cwd: &Path) -> proc::Spec {
 
 fn start(cwd: &Path) -> (Adapter, Receiver<Event>, String) {
     let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start(&spec(cwd), None, move |e| _ = tx.send(e)).unwrap();
+    let adapter = Adapter::start(&CODEX, &spec(cwd), None, move |e| _ = tx.send(e)).unwrap();
     let options = Options {
         cwd: cwd.into(),
         ..Default::default()
     };
-    let id = adapter.new_session(&options).unwrap().id;
+    let id = adapter.new_session(&options).unwrap().0.id;
     (adapter, rx, id)
 }
 
@@ -138,7 +138,7 @@ fn the_adapter_hears_allow_once_whatever_the_options() {
     let (adapter, rx, id) = start(dir.path());
     adapter.prompt(&id, "ask", TurnConfig::default()).unwrap();
     let (ask, reply) = until(&rx, |e| match e {
-        Event::Ask(_, ask, reply) => Some((ask, reply)),
+        Event::Ask(_, ask, _, reply) => Some((ask, reply)),
         _ => None,
     });
     assert_eq!(ask.tool.id, "t-ask");
@@ -422,7 +422,12 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
         ..Opened::default()
     };
     let mut demux = s.live.demux.lock().unwrap();
-    demux.open(Some(opened), None, Box::new(move |e| _ = tx.send(e)));
+    demux.open(
+        Some((opened, HashMap::new())),
+        None,
+        false,
+        Box::new(move |e| _ = tx.send(e)),
+    );
     drop(demux);
     let Ok(backend::Event::Exited(x)) = late.try_recv() else {
         panic!("the late open's stream did not end Exited");
@@ -716,7 +721,7 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
         backend::Event::Opened(o) => Some(o.config),
         _ => None,
     });
-    assert_eq!(config[0].value, "read-only");
+    assert_eq!(config[0].value, Mode::Ask.as_str());
     open.prompt("model").unwrap();
     assert_eq!(said(&rx), "gpt-5.5 read-only");
     open.prompt("codex-config").unwrap();
@@ -820,7 +825,7 @@ fn codex() -> Sandbox {
 fn codex_chat(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Opened) {
     let (tx, rx) = mpsc::channel();
     let mut spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
-    (spec.trusted, spec.mode) = (true, CODEX.chat.into());
+    (spec.trusted, spec.mode) = (true, Mode::Auto.as_str().into());
     let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
     let open = open.unwrap();
     let opened = until(&rx, |e| match e {
@@ -839,12 +844,16 @@ fn option<'a>(config: &'a [Config], id: &str) -> &'a str {
 fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_options() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, opened) = codex_chat(&acp, &sb);
-    assert_eq!(option(&opened.config, "mode"), "agent");
+    assert_eq!(option(&opened.config, "mode"), Mode::Auto.as_str());
     assert_eq!(option(&opened.config, "effort"), "medium");
     let models: Vec<_> = opened.models.iter().map(|m| m.label.as_str()).collect();
     assert_eq!(models, ["GPT-5.5", "GPT-5.5 mini", "Die"]);
     for (setting, id, value) in [
-        (Setting::Mode("read-only".into()), "mode", "read-only"),
+        (
+            Setting::Mode(Mode::Ask.as_str().into()),
+            "mode",
+            Mode::Ask.as_str(),
+        ),
         (Setting::Effort("high".into()), "effort", "high"),
         (
             Setting::Model("gpt-5.5-mini".into()),
@@ -861,7 +870,7 @@ fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_opt
     }
     let refused = open.set(Setting::Model("opus".into())).unwrap_err();
     assert_eq!(refused.to_string(), "This agent offers no model opus");
-    assert!(open.set(Setting::Mode("default".into())).is_err());
+    assert!(open.set(Setting::Mode("plan".into())).is_err());
 }
 
 #[test]
@@ -943,7 +952,7 @@ fn codex_past_lists_rollouts_without_an_adapter() {
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
     let acp = Acp::default();
     assert!(
-        adapters::installed(&sb.state.data_dir, CODEX.adapter)
+        adapters::installed(&sb.state.data_dir, CODEX.adapter().unwrap())
             .current
             .is_none()
     );
@@ -1104,12 +1113,12 @@ fn a_codex_chat_turns_off_each_server_of_the_user_s_config_and_the_project_layer
 fn a_codex_participant_reads_in_codex_s_sandbox_and_a_chat_in_its_mode() {
     let mode = |kind| {
         let mut spec = Spec::new(&CODEX, "/r", kind);
-        spec.mode = CODEX.full.into();
+        spec.mode = Mode::Full.as_str().into();
         config_of(&spec)[0].1.clone()
     };
-    assert_eq!(mode(Kind::Verifier), "read-only");
-    assert_eq!(mode(Kind::Untrusted), "read-only");
-    assert_eq!(mode(Kind::Chat), "agent-full-access");
+    assert_eq!(mode(Kind::Verifier), Mode::Ask.as_str());
+    assert_eq!(mode(Kind::Untrusted), Mode::Ask.as_str());
+    assert_eq!(mode(Kind::Chat), Mode::Full.as_str());
 }
 
 #[test]
@@ -1145,7 +1154,8 @@ fn concurrent_untrusted_codex_participants_share_one_profile_written_once() {
 fn a_switch_the_agent_refuses_comes_back_as_refused() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, _) = codex_chat(&acp, &sb);
-    open.set(Setting::Mode("workspace-write".into())).unwrap();
+    open.set(Setting::Mode(Mode::Edits.as_str().into()))
+        .unwrap();
     let why = until(&rx, |e| match e {
         backend::Event::Update(Update::Refused(why)) => Some(why),
         _ => None,
@@ -1223,4 +1233,293 @@ fn an_adapter_s_slot_goes_with_its_last_session() {
         drop(open);
         assert!(acp.adapters.lock().unwrap().is_empty());
     }
+}
+
+fn antigravity() -> Sandbox {
+    let sb = Sandbox::new();
+    let fake = testutil::fake().display().to_string();
+    let config = adapters::Config {
+        cli: [(ANTIGRAVITY.id.into(), fake)].into(),
+        antigravity: true,
+        ..adapters::Config::default()
+    };
+    sb.state.set_block(BLOCK, config).unwrap();
+    let home = sb.path("agy-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut env = sb.state.env.write().unwrap();
+    env.vars.retain(|(k, _)| k != "HOME" && k != "USERPROFILE");
+    env.vars.push(("HOME".into(), home.display().to_string()));
+    env.vars
+        .push(("USERPROFILE".into(), home.display().to_string()));
+    drop(env);
+    sb
+}
+
+#[test]
+fn antigravity_runs_built_in_acp_cli_normalizes_thought_level_modes_and_account() {
+    let (acp, sb) = (Acp::default(), antigravity());
+    let (tx, rx) = mpsc::channel();
+    let mut spec = Spec::new(
+        &ANTIGRAVITY,
+        &sb.dir.path().display().to_string(),
+        Kind::Chat,
+    );
+    (spec.trusted, spec.mode) = (true, Mode::Auto.as_str().into());
+    let open = acp
+        .start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)))
+        .unwrap();
+    let opened = until(&rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(
+        opened.account.as_ref().map(|a| a.plan.as_str()),
+        Some("Google AI Pro")
+    );
+    assert_eq!(option(&opened.config, "mode"), Mode::Auto.as_str());
+    assert_eq!(option(&opened.config, "effort"), "high");
+
+    open.set(Setting::Mode(Mode::Edits.as_str().into()))
+        .unwrap();
+    let config = until(&rx, |e| match e {
+        backend::Event::Update(Update::Config(c)) => Some(c),
+        _ => None,
+    });
+    assert_eq!(option(&config, "mode"), Mode::Edits.as_str());
+
+    open.set(Setting::Effort("xhigh".into())).unwrap();
+    let config = until(&rx, |e| match e {
+        backend::Event::Update(Update::Config(c)) => Some(c),
+        _ => None,
+    });
+    assert_eq!(option(&config, "effort"), "xhigh");
+
+    open.prompt("model; effort").unwrap();
+    assert_eq!(said(&rx), "gemini-4-neon accept-editsxhigh");
+}
+
+#[test]
+fn antigravity_host_mcp_handles_server_discover_and_auto_allows_mcp_prefix() {
+    let (acp, sb) = (Acp::default(), antigravity());
+    let (calls_tx, calls_rx) = mpsc::channel();
+    let calls_tx = Mutex::new(calls_tx);
+    let tools = detached_core::host::server(move |c| {
+        _ = calls_tx.lock().unwrap().send(c);
+        Ok(json!("Recorded."))
+    });
+    let mut spec = Spec::new(
+        &ANTIGRAVITY,
+        &sb.dir.path().display().to_string(),
+        Kind::Chat,
+    );
+    (spec.trusted, spec.mode, spec.tools) = (true, Mode::Auto.as_str().into(), Some(tools));
+    let (tx, rx) = mpsc::channel();
+    let open = acp
+        .start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)))
+        .unwrap();
+    open.prompt(r#"act {"action":"done","args":{"nothing_found":true}}; host-ask"#)
+        .unwrap();
+    let mut text = String::new();
+    let mut asked = false;
+    while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
+        match e {
+            backend::Event::Update(Update::Text(t)) => text.push_str(&t),
+            backend::Event::Ask(..) => asked = true,
+            backend::Event::Ended(..) => break,
+            _ => {}
+        }
+    }
+    assert!(!asked, "host MCP tool calls are auto-allowed");
+    assert!(text.contains("Recorded."), "{text}");
+    assert!(text.contains("picked allow_once"), "{text}");
+    assert!(calls_rx.try_recv().is_ok());
+
+    // Spoofed title on run_command, foreign host prefix, and missing tool name must all ask.
+    for step in ["spoof-title", "foreign-host", "no-name-ask"] {
+        open.prompt(step).unwrap();
+        let mut asked_step = false;
+        let mut said_step = String::new();
+        while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
+            match e {
+                backend::Event::Ask(_, reply) => {
+                    asked_step = true;
+                    reply.send(Answer::Reject);
+                }
+                backend::Event::Update(Update::Text(t)) => said_step.push_str(&t),
+                backend::Event::Ended(..) => break,
+                _ => {}
+            }
+        }
+        assert!(asked_step, "{step} must not be auto-allowed");
+        assert!(
+            said_step.contains("picked reject_once"),
+            "{step}: {said_step}"
+        );
+    }
+}
+
+#[test]
+fn antigravity_chat_and_council_full_use_separate_processes_and_refuse_live_full_switch() {
+    let (acp, sb) = (Acp::default(), antigravity());
+    let repo = sb.dir.path().display().to_string();
+
+    let (chat_tx, chat_rx) = mpsc::channel();
+    let mut chat_spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Chat);
+    (chat_spec.trusted, chat_spec.mode) = (true, Mode::Auto.as_str().into());
+    let chat = acp
+        .start(
+            &sb.state,
+            &chat_spec,
+            None,
+            Box::new(move |e| _ = chat_tx.send(e)),
+        )
+        .unwrap();
+    let chat_opened = until(&chat_rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(option(&chat_opened.config, "mode"), Mode::Auto.as_str());
+
+    let (council_tx, council_rx) = mpsc::channel();
+    let mut council_spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Verifier);
+    (council_spec.trusted, council_spec.mode) = (true, Mode::Full.as_str().into());
+    let council = acp
+        .start(
+            &sb.state,
+            &council_spec,
+            None,
+            Box::new(move |e| _ = council_tx.send(e)),
+        )
+        .unwrap();
+    let council_opened = until(&council_rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(option(&council_opened.config, "mode"), Mode::Full.as_str());
+    assert_ne!(chat.live.adapter.pid, council.live.adapter.pid);
+
+    chat.prompt("skip-perms").unwrap();
+    assert_eq!(said(&chat_rx), "false");
+    council.prompt("skip-perms").unwrap();
+    assert_eq!(said(&council_rx), "true");
+
+    let err = chat
+        .set(Setting::Mode(Mode::Full.as_str().into()))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("only supports Full access"), "{err}");
+    chat.prompt("model").unwrap();
+    assert_eq!(said(&chat_rx), "gemini-4-neon auto");
+
+    let leave = council
+        .set(Setting::Mode(Mode::Ask.as_str().into()))
+        .unwrap_err()
+        .to_string();
+    assert!(leave.contains("cannot leave Full access"), "{leave}");
+
+    // Untrusted participants never receive the skip-permissions flag even if Full is requested.
+    let (untrusted_tx, untrusted_rx) = mpsc::channel();
+    let mut untrusted_spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Untrusted);
+    untrusted_spec.mode = Mode::Full.as_str().into();
+    let untrusted = acp
+        .start(
+            &sb.state,
+            &untrusted_spec,
+            None,
+            Box::new(move |e| _ = untrusted_tx.send(e)),
+        )
+        .unwrap();
+    let untrusted_opened = until(&untrusted_rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    assert_eq!(option(&untrusted_opened.config, "mode"), Mode::Ask.as_str());
+    untrusted.prompt("skip-perms").unwrap();
+    assert_eq!(said(&untrusted_rx), "false");
+    assert_eq!(untrusted.live.adapter.pid, chat.live.adapter.pid);
+}
+
+#[test]
+fn acp_diff_content_reports_added_and_removed_lines() {
+    let (acp, sb) = (Acp::default(), antigravity());
+    let (tx, rx) = mpsc::channel();
+    let mut spec = Spec::new(
+        &ANTIGRAVITY,
+        &sb.dir.path().display().to_string(),
+        Kind::Chat,
+    );
+    (spec.trusted, spec.mode) = (true, Mode::Auto.as_str().into());
+    let open = acp
+        .start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)))
+        .unwrap();
+    open.prompt("diff").unwrap();
+    let mut lines = None;
+    while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
+        match e {
+            backend::Event::Update(Update::Tool(t)) if t.lines.is_some() => lines = t.lines,
+            backend::Event::Ended(..) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(lines, Some((4, 2)));
+}
+
+#[test]
+fn antigravity_past_and_transcript_read_passively_from_disk_and_delete_is_local() {
+    let sb = antigravity();
+    let repo = sb.dir.path().display().to_string();
+    let id = "11111111-1111-4111-8111-111111111111";
+    let logs = sb
+        .path("agy-home/.gemini/antigravity-cli/brain")
+        .join(id)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let rows = [
+        json!({
+            "type": "USER_INPUT",
+            "content": "<USER_REQUEST>\nFix the bug\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\n</ADDITIONAL_METADATA>"
+        }),
+        json!({
+            "type": "PLANNER_RESPONSE",
+            "thinking": "Checking files",
+            "tool_calls": [{"name": "read_file", "args": {"Path": "src/lib.rs"}}],
+            "content": "All fixed."
+        }),
+    ];
+    let body = rows
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(logs.join("transcript_full.jsonl"), format!("{body}\n")).unwrap();
+    chat_index::created_in(&sb.state, id, ANTIGRAVITY.id, Some(&repo)).unwrap();
+
+    let acp = Acp::default();
+    let spec = Spec::new(&ANTIGRAVITY, &repo, Kind::Chat);
+    let past = acp.past(&sb.state, &spec).unwrap();
+    assert_eq!(past.len(), 1);
+    assert_eq!(past[0].id, id);
+    assert_eq!(past[0].title, "Fix the bug");
+    assert!(acp.adapters.lock().unwrap().is_empty());
+
+    let updates = acp.transcript(&sb.state, &spec, id).unwrap();
+    assert!(matches!(&updates[0], Update::User(s) if s == "Fix the bug"));
+    assert!(
+        updates
+            .iter()
+            .any(|u| matches!(u, Update::Thought(s) if s == "Checking files"))
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|u| matches!(u, Update::Tool(t) if t.title.as_deref() == Some("read_file")))
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|u| matches!(u, Update::Text(s) if s == "All fixed."))
+    );
+
+    acp.delete(&sb.state, &spec, id).unwrap();
+    assert!(acp.adapters.lock().unwrap().is_empty());
 }

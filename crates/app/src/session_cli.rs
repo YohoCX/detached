@@ -14,9 +14,9 @@ use futures::channel::mpsc;
 use gpui_kit::{App, Entity, WindowingRequest};
 use kernel::session::{self, Answer, End, Item, Session, State};
 
-const USAGE: &str = "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]
-stdin: prompts, y/a/n to an ask, /mode <default|acceptEdits|plan|auto>, /model <name>, /stop <task id>";
-const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto"];
+const USAGE: &str =
+    "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]
+stdin: prompts, y/a/n to an ask, /mode <ask|edits|plan|auto>, /model <name>, /stop <task id>";
 
 enum Input {
     Changed,
@@ -208,8 +208,10 @@ fn command(s: &Entity<Session>, line: &str, cx: &mut App) -> bool {
     };
     let session = s.read(cx);
     let setting = match cmd {
-        "/mode" if MODES.contains(&arg) => Ok(Setting::Mode(arg.into())),
-        "/mode" => Err(format!("no mode {arg}")),
+        "/mode" => match CLAUDE.mode(arg) {
+            Some(m) => Ok(Setting::Mode(m.mode.as_str().into())),
+            None => Err(format!("no mode {arg}")),
+        },
         "/model" if session.models.iter().any(|m| m.value == arg) => Ok(Setting::Model(arg.into())),
         "/model" => Err(format!("this session offers no model {arg}")),
         "/stop" => {

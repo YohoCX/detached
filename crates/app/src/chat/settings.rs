@@ -1,5 +1,5 @@
 use detached_core::adapters::Provider;
-use detached_core::backend::Model;
+use detached_core::backend::{Model, effort_label};
 use detached_core::chat_settings::Preset;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::IndexPath;
@@ -81,7 +81,7 @@ impl Fields {
         let modes = p
             .modes
             .iter()
-            .map(|(id, label, _)| (id.to_string(), label.to_string()));
+            .map(|m| (m.mode.as_str().to_string(), m.mode.label().to_string()));
         let opts = [
             model_options(models, &saved[0]),
             efforts(models, preset.efforts(p.id), &saved[0], &saved[1]),
@@ -168,7 +168,7 @@ fn efforts(
     } else {
         model.map_or(&[][..], |m| &m.efforts)
     };
-    options(listed.iter().map(|e| (e.clone(), e.clone())), saved)
+    options(listed.iter().map(|e| (e.clone(), effort_label(e))), saved)
 }
 
 impl Page {
@@ -298,7 +298,7 @@ impl Page {
     fn choices(&self, f: &Fields, preset: &Preset, cx: &App) -> impl IntoElement + use<> {
         let id = |key: &str| SharedString::from(format!("chat.defaults.{}.{key}", f.p.id));
         let mode = value(&f.picks[2], cx);
-        let mode = f.p.modes.iter().find(|m| m.0 == mode).map(|m| m.2.into());
+        let mode = f.p.mode(&mode).map(|m| m.about.into());
         let details = [
             preset
                 .models(f.p.id)

@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use detached_core::api;
-use detached_core::backend::{Limit, Model, Past, Piece, Question, Setting, Tool, TurnConfig};
+use detached_core::backend::{
+    Limit, Model, Past, Piece, Question, Setting, Tool, TurnConfig, effort_label, tool_label,
+};
 use gpui_kit::base::{Button, TestSupportExt, TestTextExt};
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, InputEvent, InputState, MoveDown, MoveUp, Textarea, TextareaState,
@@ -26,15 +28,14 @@ use crate::files::{Links, Markdown};
 use crate::ui::theme::chat as size;
 use crate::ui::{self, DrawnMenu, Icon, radius, text, theme};
 use crate::util::{age, folder_name, now, span, status_of};
-use detached_core::adapters::{CLAUDE, LoginStatus, Provider};
-use detached_core::backend::Name;
+use detached_core::adapters::{LoginStatus, Provider, RepoTrust};
 use detached_core::chat_settings::Preset;
 use kernel::agents::Agents;
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::inbox::{self, Messages};
 use kernel::resource::Interest;
-use kernel::session::{AUTO, Answer, Back, Item, Session, State};
+use kernel::session::{Answer, Back, Item, Session, State};
 use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
@@ -426,14 +427,15 @@ impl ChatView {
         let mode_id = s
             .and_then(|s| s.option("mode"))
             .unwrap_or_else(|| chat.mode());
-        let mode = (p.modes.iter())
-            .find(|(m, ..)| *m == mode_id)
-            .or(p.modes.iter().find(|(m, ..)| *m == chat.mode()))
+        let mode = p
+            .mode(mode_id)
+            .or_else(|| p.mode(chat.mode()))
             .unwrap_or(&p.modes[0]);
-        let modes = (p.modes.iter()).fold(DrawnMenu::default(), |menu, &(id, label, about)| {
-            (menu.item(label, pick(Setting::Mode(id.into()))))
-                .checked(id == mode.0)
-                .detail(about)
+        let modes = (p.modes.iter()).fold(DrawnMenu::default(), |menu, m| {
+            let id = m.mode.as_str();
+            (menu.item(m.mode.label(), pick(Setting::Mode(id.into()))))
+                .checked(m.mode == mode.mode)
+                .detail(m.about)
         });
         // Before the session lists its models, the ones it listed last time.
         let preset = Preset::read(Settings::get(cx));
@@ -441,7 +443,8 @@ impl ChatView {
             Some(m) if !m.is_empty() => m,
             _ => preset.models(p.id),
         };
-        let has_auto = p.modes.iter().any(|(m, ..)| *m == AUTO);
+        // Only annotate `(no auto)` when the provider reports per-model auto support.
+        let tracks_auto = models.iter().any(|m| m.auto);
         let opened = s.filter(|s| s.version.is_some());
         let current = opened.map_or(chat.model.as_deref(), |s| s.option("model"));
         let model = current
@@ -452,7 +455,7 @@ impl ChatView {
         let chosen = Model::find(models, current.unwrap_or("default"));
         let add_models = |menu: DrawnMenu| {
             models.iter().fold(menu, |menu, m| {
-                let label = match m.auto || !has_auto {
+                let label = match m.auto || !tracks_auto {
                     true => m.label.clone(),
                     false => format!("{} (no auto)", m.label),
                 };
@@ -474,7 +477,7 @@ impl ChatView {
         let add_efforts = |menu: DrawnMenu| {
             efforts.iter().fold(menu, |menu, e| {
                 let setting = Setting::Effort(e.clone());
-                menu.item(e.clone(), pick(setting))
+                menu.item(effort_label(e), pick(setting))
                     .checked(effort == Some(e.as_str()))
             })
         };
@@ -489,7 +492,7 @@ impl ChatView {
             let menu = (!models.is_empty()).then(|| add_models(DrawnMenu::default()));
             inline.push(("chat.model", "Model", model, None, menu));
             if !efforts.is_empty() {
-                let label = effort.unwrap_or("Default").to_string();
+                let label = effort.map_or_else(|| "Default".into(), effort_label);
                 let menu = Some(add_efforts(DrawnMenu::default()));
                 inline.push(("chat.effort", "Effort", label, None, menu));
             }
@@ -497,8 +500,8 @@ impl ChatView {
         let modes = (
             "chat.mode",
             "Permissions",
-            mode.1.into(),
-            Some(mode.2),
+            mode.mode.label().into(),
+            Some(mode.about),
             Some(modes),
         );
         let usage = s.and_then(|s| {
@@ -1023,7 +1026,7 @@ impl ChatView {
         for &(at, item) in items {
             let Item::Tool(tool) = item else { continue };
             status = status.max(self.tool_state(at, tool, cx));
-            let name = tool.kind.clone().unwrap_or_default();
+            let name = kind(tool);
             match counts.iter_mut().find(|(n, _)| *n == name) {
                 Some((_, c)) => *c += 1,
                 None => counts.push((name, 1)),
@@ -1382,10 +1385,7 @@ impl ChatView {
             );
         }
         if let Some(effort) = &config.effort {
-            let mut chars = effort.chars();
-            details.push(chars.next().map_or_else(String::new, |first| {
-                first.to_uppercase().to_string() + chars.as_str()
-            }));
+            details.push(effort_label(effort));
         }
         if let Some(ms) = ms {
             details.push(match ok {
@@ -1944,9 +1944,9 @@ impl ChatView {
         let t = theme(cx);
         let chat = self.session.read(cx);
         let p = chat.review.as_ref()?;
-        let until = match chat.provider.id == CLAUDE.id {
-            true => "Until you trust them, sessions here load only your own settings, so the repo's CLAUDE.md and .claude are skipped too.".to_string(),
-            false => format!("{} loads them itself, so it runs here only once you trust them.", chat.provider.name),
+        let until = match chat.provider.repo_trust {
+            RepoTrust::IsolateUntrusted => "Until you trust them, sessions here load only your own settings, so the repo's CLAUDE.md and .claude are skipped too.".to_string(),
+            RepoTrust::RequireTrust => format!("{} loads them itself, so it runs here only once you trust them.", chat.provider.name),
         };
         let small = |text: &str| {
             div()
@@ -2205,7 +2205,11 @@ fn friendly_model_id(id: &str) -> String {
 }
 
 fn kind(t: &Tool) -> String {
-    t.kind.clone().unwrap_or_default()
+    t.kind
+        .as_deref()
+        .map(tool_label)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn title(t: &Tool) -> String {
@@ -2458,9 +2462,7 @@ fn provider_rows(cx: &App) -> Vec<(&'static Provider, &'static str, bool)> {
                 _ if !config.shows(p) => ("Off", false),
                 _ if !a.loaded() => ("Checking…", false),
                 None => ("CLI not found", false),
-                _ if p.backend == Name::Acp && r.installed.current.is_none() => {
-                    ("No adapter", false)
-                }
+                _ if p.has_adapter() && r.installed.current.is_none() => ("No adapter", false),
                 Some(LoginStatus::LoggedOut) => ("Not logged in", false),
                 Some(LoginStatus::LoggedIn) => ("Logged in", true),
                 Some(LoginStatus::Unknown) => ("Login status unknown", true),

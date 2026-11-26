@@ -290,7 +290,9 @@ impl Chat {
     }
 
     pub fn mode(&self) -> &str {
-        self.mode.as_deref().unwrap_or(self.provider.chat)
+        self.mode
+            .as_deref()
+            .unwrap_or(detached_core::backend::Mode::Auto.as_str())
     }
 
     pub fn save_defaults(&self, cx: &mut Context<Self>) {
@@ -346,8 +348,7 @@ impl Chat {
         }
         if let Some(s) = self.live(cx) {
             s.update(cx, |s, cx| {
-                if let Err(e) = s.set(setting) {
-                    s.fail(e.to_string());
+                if s.set(setting).is_err() {
                     cx.notify();
                 }
             });
@@ -671,6 +672,6 @@ fn choices(preset: &Preset, p: &Provider) -> Choices {
     let mut choices = preset.providers.get(p.id).cloned().unwrap_or_default();
     choices.mode = choices
         .mode
-        .filter(|m| p.modes.iter().any(|(id, ..)| *id == m));
+        .and_then(|m| p.mode(&m).map(|s| s.mode.as_str().into()));
     choices
 }

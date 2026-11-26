@@ -6,8 +6,8 @@ A native multi-repo git client for macOS, Windows and Linux, with AI agents besi
   find in files at any ref, the git log.
 - **Merge requests and pipelines** for GitLab and GitHub, self-hosted GitLab and GitHub Enterprise
   included.
-- **Agent chats** with Claude Code and Codex: per-repo trust, turn snapshots you can restore,
-  skills, and a read-only view of the client.
+- **Agent chats** with Claude Code, Codex and Antigravity: per-repo trust, turn snapshots you can
+  restore, skills, and a read-only view of the client.
 - **Council of agents:** review a branch, gate a merge, triage an MR or issue, review a plan, argue
   a question. Each finding can be fixed in its own worktree and reaches your branch on your click.
 - **Docs, processes, terminals:** a repo's plans and decisions, dev servers with encrypted env
@@ -49,6 +49,9 @@ made or endorsed by Anthropic or OpenAI.
 Codex is optional and off until `settings.json` has `"agents": {"codex": true}`. It runs on your
 `codex`, 0.166.0 or later, and its login, through its ACP adapter `codex-acp`, which Settings ›
 Agents installs from Detached's signed adapter catalog.
+Antigravity is also optional (`"agents": {"antigravity": true}` or toggled in Settings › Agents) and
+runs directly on your `agy` CLI (1.5.0 or later) over its built-in `agy acp` server, with no
+separate adapter.
 Settings › Agents shows the CLI version and whether it is logged in when the CLI reports its status.
 
 - **Chats** on a repo or a whole folder, with the model, effort and permission mode you pick. A

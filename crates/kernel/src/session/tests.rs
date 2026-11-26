@@ -900,13 +900,14 @@ fn the_adapter_gets_only_allowed_names(cx: &mut TestAppContext) {
         ],
     );
     let names = turn(&open(&f, Kind::Chat, cx), "env", cx);
+    let cli_var = CODEX.cli_var().unwrap();
     let allowed: Vec<&str> = (proc::ALLOWED.iter().chain(CODEX.env))
         .copied()
-        .chain([CODEX.cli_var])
+        .chain([cli_var])
         .collect();
     let names: Vec<&str> = names.split(',').collect();
     assert!(names.iter().all(|n| allowed.contains(n)), "{names:?}");
-    assert!(names.contains(&"CODEX_HOME") && names.contains(&CODEX.cli_var));
+    assert!(names.contains(&"CODEX_HOME") && names.contains(&cli_var));
 }
 
 #[gpui::test]
@@ -1100,12 +1101,12 @@ fn boot_codex(cx: &mut TestAppContext) -> Fixture {
 fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut TestAppContext) {
     let f = boot_codex(cx);
     let mut spec = f.spec(Kind::Chat);
-    spec.mode = CODEX.chat.into();
+    spec.mode = detached_core::backend::Mode::Auto.as_str().into();
     let s = open_spec(spec.clone(), None, cx);
     assert_eq!(
         s.read_with(cx, |s, _| s.option("mode").map(String::from))
             .unwrap(),
-        "agent"
+        "auto"
     );
     s.update(cx, |s, cx| s.prompt("bg".into(), cx));
     let pid = |cx: &App| {
@@ -1154,4 +1155,35 @@ fn a_link_in_codex_s_layer_refuses_a_codex_session_and_no_claude_one(cx: &mut Te
         why.starts_with("Codex cannot run here") && why.contains("link"),
         "{why}"
     );
+}
+
+#[gpui::test]
+fn switching_antigravity_to_full_mid_session_is_refused_with_a_note(cx: &mut TestAppContext) {
+    use detached_core::adapters::ANTIGRAVITY;
+    let f = boot_fake(cx, Fake::Acp);
+    let fake = detached_acp::testutil::fake().display().to_string();
+    let mut cfg: Config = f.core.get_settings().block(BLOCK).unwrap_or_default();
+    cfg.cli.insert(ANTIGRAVITY.id.into(), fake);
+    cfg.antigravity = true;
+    f.core.set_block(BLOCK, cfg).unwrap();
+
+    let mut spec = Spec::new(&ANTIGRAVITY, &f.repo, Kind::Chat);
+    spec.mode = Mode::Auto.as_str().into();
+    let s = open_spec(spec, None, cx);
+    let err = s
+        .update(cx, |s, _| s.set(Setting::Mode(Mode::Full.as_str().into())))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("only supports Full access"), "{err}");
+    s.read_with(cx, |s, _| {
+        assert!(s.refused);
+        assert_eq!(s.option("mode"), Some(Mode::Auto.as_str()));
+        assert!(
+            s.items
+                .iter()
+                .any(|i| matches!(i, Item::Note(n) if n.contains("only supports Full access"))),
+            "{:?}",
+            s.items
+        );
+    });
 }

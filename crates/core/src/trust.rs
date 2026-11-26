@@ -17,15 +17,9 @@ use crate::git::runner::{Kind, out};
 
 const FILE: &str = "agent-trust.json";
 const SETTINGS: &[&str] = &[".claude/settings.json", ".claude/settings.local.json"];
-const MARKDOWN: &[&str] = &[
-    ".claude/skills",
-    ".claude/agents",
-    ".claude/commands",
-    ".agents/skills",
-];
-/// Codex's project layer (config, rules, hooks), which no parser here reads: each file is listed
-/// whole when it says anything.
-const CODEX: &str = ".codex";
+const MARKDOWN: &[&str] = &[".claude/skills", ".claude/agents", ".claude/commands"];
+/// Optional provider layers listed whole; `.agents/skills/**/*.md` still goes through `front`.
+const OPAQUE: &[&str] = &[".codex", ".agent", ".agents", "_agents", "_agent"];
 /// Settings that run nothing and grant nothing.
 const QUIET: &[&str] = &[
     "$schema",
@@ -45,23 +39,32 @@ pub struct Project {
     pub items: Vec<String>,
     /// The files read, with their git object ids; any change asks again.
     pub fingerprint: String,
-    /// Why Codex's files (`.codex/`, `.agents/`) were not scanned: a link or their size. Only a
-    /// provider that reads them is refused for it.
-    pub refused: Option<String>,
+    /// Why optional provider layers were not scanned: a link or their size. Only a provider whose
+    /// trust globs read a refused layer is refused for it.
+    pub refused: Vec<String>,
+}
+
+fn has_dir(path: &str, dir: &str) -> bool {
+    path == dir
+        || path
+            .strip_prefix(dir)
+            .is_some_and(|r| r.starts_with('/') || r.starts_with(' '))
+}
+
+fn is_agent_skill_md(file: &str) -> bool {
+    file.starts_with(".agents/skills/") && file.ends_with(".md")
 }
 
 impl Project {
     /// Why a provider whose trust globs are `globs` may not load this tree.
     pub fn refuses(&self, globs: &[&str]) -> Option<&str> {
-        let reads = globs
-            .iter()
-            .any(|g| CODEX_ONLY.iter().any(|d| g.starts_with(d)));
-        self.refused.as_deref().filter(|_| reads)
+        self.refused.iter().map(String::as_str).find(|why| {
+            globs
+                .iter()
+                .any(|g| OPAQUE.iter().any(|d| has_dir(g, d) && has_dir(why, d)))
+        })
     }
 }
-
-/// Codex's alone of the trust files: a problem in them refuses Codex, not every provider.
-const CODEX_ONLY: &[&str] = &[CODEX, ".agents"];
 
 fn refuse_link(p: impl std::fmt::Display) -> String {
     format!("{p} is a link: the scan refuses it")
@@ -78,16 +81,16 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     for dir in MARKDOWN {
         markdown(repo, &repo.join(dir), &mut files);
     }
-    let mut codex = vec![];
     let size = |f: &String| fs::metadata(repo.join(f)).map_or(0, |m| m.len());
-    let refused = match layer(repo, &repo.join(CODEX), &mut codex) {
-        Err(e) => Some(e),
-        Ok(()) if codex.iter().map(size).sum::<u64>() > 1 << 20 => Some(over()),
-        Ok(()) => {
-            files.extend(codex);
-            None
+    let mut refused = vec![];
+    for dir in OPAQUE {
+        let mut found = vec![];
+        match layer(repo, &repo.join(dir), &mut found) {
+            Err(e) => refused.push(e),
+            Ok(()) if found.iter().map(size).sum::<u64>() > 1 << 20 => refused.push(over(dir)),
+            Ok(()) => files.extend(found),
         }
-    };
+    }
     files.sort();
     let mut items = vec![];
     for f in &files {
@@ -116,21 +119,30 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     })
 }
 
-fn over() -> String {
-    format!("{CODEX} is over 1 MiB: the scan refuses it")
+fn over(dir: &str) -> String {
+    format!("{dir} is over 1 MiB: the scan refuses it")
 }
 
 /// What `repo`'s trust files at `sha` would bring in, read as raw blobs: a link among them or more
 /// than 1 MiB of them refuses the scan.
 pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
     use crate::council::tree;
-    let roots = [".claude", ".mcp.json", ".codex", ".agents"];
+    let roots = [
+        ".claude",
+        ".mcp.json",
+        ".codex",
+        ".agent",
+        ".agents",
+        "_agents",
+        "_agent",
+    ];
+    let opaque = |p: &str| OPAQUE.iter().any(|d| has_dir(p, d));
     let all = tree::entries(env, repo, sha, &roots)?;
     let wanted = |p: &str| {
         SETTINGS.contains(&p)
             || p == ".mcp.json"
-            || p.starts_with(&format!("{CODEX}/"))
-            || (MARKDOWN.iter().any(|d| p.starts_with(&format!("{d}/"))) && p.ends_with(".md"))
+            || opaque(p)
+            || (MARKDOWN.iter().any(|d| has_dir(p, d)) && p.ends_with(".md"))
     };
     let link = |p: &str| {
         roots.contains(&p)
@@ -139,26 +151,35 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
                 .any(|d| d.starts_with(p) || p.starts_with(d))
             || wanted(p)
     };
-    let codex_only = |p: &str| {
-        CODEX_ONLY
-            .iter()
-            .any(|d| p == *d || p.starts_with(&format!("{d}/")))
-    };
     let links = all.iter().filter(|e| e.mode == "120000" && link(&e.path));
-    let (theirs, links): (Vec<_>, Vec<_>) = links.partition(|e| codex_only(&e.path));
+    let (theirs, links): (Vec<_>, Vec<_>) = links.partition(|e| opaque(&e.path));
     if let Some(e) = links.first() {
         return Err(Error::Other(refuse_link(&e.path)));
     }
     let mut files: Vec<&tree::Entry> = all.iter().filter(|e| wanted(&e.path)).collect();
-    let codex = files
-        .iter()
-        .filter(|e| e.path.starts_with(&format!("{CODEX}/")));
-    let refused = match theirs.first() {
-        Some(e) => Some(refuse_link(&e.path)),
-        None => (codex.map(|e| e.size).sum::<u64>() > 1 << 20).then(over),
-    };
-    if refused.is_some() {
-        files.retain(|e| !codex_only(&e.path));
+    let mut refused = vec![];
+    for d in OPAQUE {
+        if let Some(e) = theirs.iter().find(|e| has_dir(&e.path, d)) {
+            refused.push(refuse_link(&e.path));
+            continue;
+        }
+        let total: u64 = files
+            .iter()
+            .filter(|e| has_dir(&e.path, d))
+            .map(|e| e.size)
+            .sum();
+        if total > 1 << 20 {
+            refused.push(over(d));
+        }
+    }
+    if !refused.is_empty() {
+        files.retain(|e| {
+            !refused.iter().any(|why| {
+                OPAQUE
+                    .iter()
+                    .any(|d| has_dir(why, d) && has_dir(&e.path, d))
+            })
+        });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     if files.iter().map(|e| e.size).sum::<u64>() > 1 << 20 {
@@ -227,18 +248,25 @@ fn load(config_dir: &Path) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// Every file under Codex's layer `dir`, read whole: a link in it, or it a link, refuses the scan.
+fn rel_display(repo: &Path, path: &Path) -> String {
+    path.strip_prefix(repo)
+        .ok()
+        .and_then(Path::to_str)
+        .map(crate::git::files::slashed)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 fn layer(repo: &Path, dir: &Path, files: &mut Vec<String>) -> std::result::Result<(), String> {
     let Ok(m) = dir.symlink_metadata() else {
         return Ok(());
     };
     if m.file_type().is_symlink() {
-        return Err(refuse_link(dir.display()));
+        return Err(refuse_link(rel_display(repo, dir)));
     }
     for e in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
         let (path, kind) = (e.path(), e.file_type().map_err(|e| e.to_string())?);
         if kind.is_symlink() {
-            return Err(refuse_link(path.display()));
+            return Err(refuse_link(rel_display(repo, &path)));
         } else if kind.is_dir() {
             layer(repo, &path, files)?;
         } else if let Some(rel) = path.strip_prefix(repo).ok().and_then(|p| p.to_str()) {
@@ -264,11 +292,11 @@ fn markdown(repo: &Path, dir: &Path, files: &mut Vec<String>) {
     }
 }
 
-/// What the trust file `file` would bring in.
 fn scan(file: &str, text: &str, items: &mut Vec<String>) {
     match file {
         ".mcp.json" => mcp(text, items),
-        f if f.starts_with(&format!("{CODEX}/")) => {
+        f if is_agent_skill_md(f) => front(f, text, items),
+        f if OPAQUE.iter().any(|d| has_dir(f, d)) => {
             if !text.trim().is_empty() {
                 items.push(format!("{f}: unparsed"));
             }
@@ -654,6 +682,97 @@ mod tests {
         let p = at(&env, &r, &head).unwrap();
         assert!(p.refuses(CLAUDE.trust).is_none());
         assert!(p.refuses(CODEX.trust).unwrap().contains("link"));
+    }
+
+    #[test]
+    fn antigravity_layers_and_skill_scripts_are_trusted_without_leaving_the_repo() {
+        let sb = Sandbox::new();
+        let parent = sb.path("outer");
+        let r = parent.join("repo");
+        fs::create_dir_all(&r).unwrap();
+        sb.git(&r, &["init", "-q"]);
+        write(&parent, ".agents/hooks.json", "{\"outer\": {}}");
+        write(
+            &r,
+            ".agents/skills/s/SKILL.md",
+            "---\nname: s\ndescription: plain\n---\nbody\n",
+        );
+        write(
+            &r,
+            ".agents/skills/s/scripts/run.sh",
+            "#!/bin/sh\necho hi\n",
+        );
+        write(&r, ".agents/hooks.json", "{\"h\": {}}\n");
+        write(&r, ".agents/rules/r.md", "always follow\n");
+        write(&r, ".agent/workflows/w.md", "step 1\n");
+        write(&r, "_agents/mcp_config.json", "{\"mcpServers\": {}}\n");
+        write(&r, "_agent/plugins/p/hooks.json", "{}\n");
+        let env = sb.state.env();
+        let p = project(&env, &r).unwrap();
+        let mut want = vec![
+            ".agents/skills/s/scripts/run.sh: unparsed",
+            ".agents/hooks.json: unparsed",
+            ".agents/rules/r.md: unparsed",
+            ".agent/workflows/w.md: unparsed",
+            "_agents/mcp_config.json: unparsed",
+            "_agent/plugins/p/hooks.json: unparsed",
+        ];
+        want.sort();
+        let mut got = p.items.clone();
+        got.sort();
+        assert_eq!(got, want);
+        sb.git(&r, &["add", "-A"]);
+        sb.git(&r, &["commit", "-qm", "a"]);
+        let head = sb.git(&r, &["rev-parse", "HEAD"]);
+        assert_eq!(at(&env, &r, &head).unwrap(), p);
+
+        #[cfg(unix)]
+        {
+            use crate::adapters::{ANTIGRAVITY, CLAUDE, CODEX};
+            std::os::unix::fs::symlink("/dev/zero", r.join(".agent/bad")).unwrap();
+            let linked = project(&env, &r).unwrap();
+            assert!(linked.refuses(CLAUDE.trust).is_none());
+            assert!(linked.refuses(CODEX.trust).is_none());
+            assert!(linked.refuses(ANTIGRAVITY.trust).unwrap().contains("link"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refusal_in_codex_does_not_mask_a_problem_in_agents() {
+        use crate::adapters::{ANTIGRAVITY, CLAUDE, CODEX};
+        let sb = Sandbox::new();
+        let r = sb.path("r");
+        fs::create_dir_all(r.join(".codex")).unwrap();
+        sb.git(&r, &["init", "-q"]);
+        write(&r, ".claude/settings.json", r#"{"env": {"A": "1"}}"#);
+        std::os::unix::fs::symlink("/dev/zero", r.join(".codex/hooks.json")).unwrap();
+        write(&r, ".agents/hooks.json", "{\"h\": {}}\n");
+        write(&r, ".agents/big.txt", &"#\n".repeat(1 << 20));
+        sb.git(&r, &["add", "-A"]);
+        sb.git(&r, &["commit", "-qm", "big"]);
+        let env = sb.state.env();
+        let head = sb.git(&r, &["rev-parse", "HEAD"]);
+        for p in [project(&env, &r).unwrap(), at(&env, &r, &head).unwrap()] {
+            assert_eq!(p.items, ["Environment: A"]);
+            assert!(p.refuses(CLAUDE.trust).is_none());
+            assert!(p.refuses(CODEX.trust).unwrap().contains(".codex"));
+            let agy = p.refuses(ANTIGRAVITY.trust).unwrap();
+            assert!(agy.contains(".agents") && agy.contains("1 MiB"), "{agy}");
+        }
+
+        fs::remove_file(r.join(".agents/big.txt")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", r.join(".agents/bad")).unwrap();
+        sb.git(&r, &["add", "-A"]);
+        sb.git(&r, &["commit", "-qm", "link"]);
+        let head = sb.git(&r, &["rev-parse", "HEAD"]);
+        for p in [project(&env, &r).unwrap(), at(&env, &r, &head).unwrap()] {
+            assert_eq!(p.items, ["Environment: A"]);
+            assert!(p.refuses(CLAUDE.trust).is_none());
+            assert!(p.refuses(CODEX.trust).unwrap().contains(".codex"));
+            let agy = p.refuses(ANTIGRAVITY.trust).unwrap();
+            assert!(agy.contains(".agents") && agy.contains("link"), "{agy}");
+        }
     }
 
     #[cfg(unix)]

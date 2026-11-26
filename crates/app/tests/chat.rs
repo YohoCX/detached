@@ -752,13 +752,13 @@ fn a_turn_s_tools_fold_into_one_line_and_a_command_s_output_opens_on_a_click(
     let group = ("chat.group", 1usize);
     assert_eq!(
         label(cx, group).as_deref(),
-        Some("3 actions · Bash ×2, Edit")
+        Some("3 actions · Run ×2, Edit")
     );
     assert!(
         items(cx).iter().any(|i| i == "Edit README.md ok"),
         "open, as one failed"
     );
-    let echo = index_of(cx, "Bash echo a ok");
+    let echo = index_of(cx, "Run echo a ok");
     cx.click(("chat.item", echo));
     assert_eq!(label(cx, ("chat.output", echo)).as_deref(), Some("a"));
     cx.click(group);
@@ -789,10 +789,10 @@ fn tools_and_blocks_show_in_the_feed(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "tools");
     wait_for_item(cx, "false failed");
-    assert!(items(cx).iter().any(|i| i == "Bash echo a ok"));
+    assert!(items(cx).iter().any(|i| i == "Run echo a ok"));
     idle(cx);
     say(cx, "deny");
-    wait_for_item(cx, "Blocked Bash: needs approval");
+    wait_for_item(cx, "Blocked Run: needs approval");
 }
 
 #[gpui_kit::test]
@@ -815,7 +815,7 @@ fn a_blocked_tool_shows_the_first_nonempty_line(cx: &mut TestAppContext) {
             cx.notify();
         });
     });
-    let row = index_of(cx, "Blocked Bash: needs approval");
+    let row = index_of(cx, "Blocked Run: needs approval");
     cx.update(|w, cx| {
         w.render_frame(cx);
         assert!(texts(w).iter().any(|t| {
@@ -873,7 +873,7 @@ fn a_model_without_auto_is_marked_and_the_mode_drop_reported(cx: &mut TestAppCon
     wait_for_item(cx, "sonnet · High · Done in ");
     idle(cx);
     pick(cx, "chat.model", "old (no auto)");
-    wait_for_item(cx, "Asked for auto, the session runs in default.");
+    wait_for_item(cx, "Asked for Auto, the session runs in Manual.");
     wait_until(cx, |cx| cx.find("chat.effort").is_none());
     say(cx, "say switched");
     wait_for_item(cx, "old · Done in ");
@@ -895,7 +895,7 @@ fn auto_is_armed_again_after_a_model_switch(cx: &mut TestAppContext) {
     wait_for_item(cx, "default auto");
     idle(cx);
     pick(cx, "chat.model", "old (no auto)");
-    wait_for_item(cx, "Asked for auto, the session runs in default.");
+    wait_for_item(cx, "Asked for Auto, the session runs in Manual.");
     pick(cx, "chat.model", "haiku");
     let model = |cx: &mut VisualTestContext| {
         cx.find("chat.model")
@@ -1087,7 +1087,7 @@ fn the_new_chat_command_requires_a_selected_checkout(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_permission_prompt_is_answered_or_goes_with_a_stop(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    let asks = format!("{} asks to use Bash: rm -rf build", CLAUDE.name);
+    let asks = format!("{} asks to use Run: rm -rf build", CLAUDE.name);
     let picked = |cx: &mut VisualTestContext| {
         let all = items(cx);
         all.iter().filter(|i| i.starts_with("picked allow")).count()
@@ -1219,11 +1219,11 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
     say(cx, "hello");
     wait_for_item(cx, "said hello");
     idle(cx);
-    pick(cx, "chat.effort", "low");
+    pick(cx, "chat.effort", "Low");
     wait_until(cx, |cx| {
         cx.find("chat.effort")
             .and_then(|e| e.description().map(String::from))
-            == Some("low".into())
+            == Some("Low".into())
     });
     say(cx, "effort");
     wait_for_item(cx, "effort low");
@@ -1277,7 +1277,7 @@ fn saving_a_blank_chat_as_default_drops_effort_the_model_does_not_support(cx: &m
         })
         .unwrap();
     });
-    assert_eq!(description(cx, "chat.effort").as_deref(), Some("high"));
+    assert_eq!(description(cx, "chat.effort").as_deref(), Some("High"));
     pick(cx, "chat.model", "old (no auto)");
     assert!(cx.find("chat.effort").is_none());
     pick(cx, "chat.more", "Save as default");
@@ -1339,7 +1339,7 @@ fn settings_chat_applies_to_an_untouched_blank_tab(cx: &mut TestAppContext) {
     cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
     for (field, option) in [
         ("chat.defaults.claude.model", "option:opus"),
-        ("chat.defaults.claude.effort", "option:high"),
+        ("chat.defaults.claude.effort", "option:High"),
         ("chat.defaults.claude.mode", "option:Plan"),
     ] {
         cx.click(field);
@@ -1429,7 +1429,7 @@ fn a_preset_model_that_drops_auto_shows_and_saves_the_current_mode(cx: &mut Test
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
     pick(cx, "chat.more", "Save as default");
     wait_until(cx, |cx| {
-        cx.settings(|s| Preset::read(s).providers["claude"].mode.as_deref() == Some("default"))
+        cx.settings(|s| Preset::read(s).providers["claude"].mode.as_deref() == Some("ask"))
     });
 }
 
@@ -2323,7 +2323,7 @@ fn the_chat_names_what_runs_by_the_provider_s_label(cx: &mut TestAppContext) {
         Some(format!("{} · solo", CLAUDE.name).as_str())
     );
     say(cx, ASK);
-    wait_for_item(cx, &format!("{} asks to use Bash", CLAUDE.name));
+    wait_for_item(cx, &format!("{} asks to use Run", CLAUDE.name));
 }
 
 #[gpui_kit::test]
@@ -2981,15 +2981,16 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
 fn codex(sb: &Sandbox) {
     use detached_core::adapters::{self, CODEX, Installed, Version};
     let fake = detached_core::testutil::bin("detached-acp", "fake_acp");
+    let adapter = CODEX.adapter().unwrap();
     let v = Version::new(2, 6, 0);
-    let exe = adapters::exe(&sb.state.data_dir, CODEX.adapter, &v);
+    let exe = adapters::exe(&sb.state.data_dir, adapter, &v);
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
     std::fs::copy(&fake, &exe).unwrap();
     let installed = Installed {
         current: Some(v),
         previous: None,
     };
-    let folder = sb.state.data_dir.join("adapters").join(CODEX.adapter);
+    let folder = sb.state.data_dir.join("adapters").join(adapter);
     std::fs::write(
         folder.join("installed.json"),
         serde_json::to_vec(&installed).unwrap(),
@@ -3057,7 +3058,7 @@ fn codex_caches_session_efforts_and_project_commands(cx: &mut TestAppContext) {
     assert!(cx.find("option:GPT-5.5").is_none());
     cx.click("option:Provider default");
     cx.click("chat.defaults.codex.effort");
-    assert!(cx.find("option:high").is_none());
+    assert!(cx.find("option:High").is_none());
     cx.press("escape");
     drop(gate);
     wait_until(cx, |cx| {
@@ -3070,7 +3071,7 @@ fn codex_caches_session_efforts_and_project_commands(cx: &mut TestAppContext) {
     assert!(cx.find("option:GPT-5.5").is_some());
     cx.press("escape");
     cx.click("chat.defaults.codex.effort");
-    cx.click("option:high");
+    cx.click("option:High");
     cx.click("chat.defaults.save");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -3114,14 +3115,14 @@ fn the_composer_offers_cached_efforts_until_live_configuration_arrives(cx: &mut 
     });
     assert_eq!(description(cx, "chat.effort").as_deref(), Some("Default"));
     cx.click("chat.effort");
-    assert!(menu_item(cx, "high").is_some());
-    assert!(menu_item(cx, "medium").is_none());
+    assert!(menu_item(cx, "High").is_some());
+    assert!(menu_item(cx, "Medium").is_none());
     cx.press("escape");
     cx.click("chat.input");
     say(cx, "say hello");
     drop(gate);
     wait_until(cx, |cx| {
-        description(cx, "chat.effort").as_deref() == Some("medium")
+        description(cx, "chat.effort").as_deref() == Some("Medium")
     });
     wait_until(cx, |cx| {
         cx.update(|_, cx| {
@@ -3219,7 +3220,7 @@ fn a_multiline_tool_title_fits_in_one_row(cx: &mut TestAppContext) {
     say(cx, "run cat <<'END'\nbody\nEND; say finished");
     wait_until(cx, |cx| items(cx).iter().any(|i| i == "finished"));
     idle(cx);
-    let row = index_of(cx, "execute Run echo cat <<'END'… ok");
+    let row = index_of(cx, "Run Run echo cat <<'END'… ok");
     assert_eq!(items(cx)[row + 1], "finished");
     cx.update(|w, cx| {
         w.render_frame(cx);
@@ -3263,8 +3264,8 @@ fn an_empty_chat_switch_uses_the_new_provider_s_preset(cx: &mut TestAppContext) 
         "{:?}",
         items(cx)
     );
-    assert_eq!(description(cx, "chat.effort").as_deref(), Some("high"));
-    assert_eq!(description(cx, "chat.mode").as_deref(), Some("Read-only"));
+    assert_eq!(description(cx, "chat.effort").as_deref(), Some("High"));
+    assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
     cx.click("chat.provider.pick");
     wait_until(cx, |cx| {
         description(cx, ("chat.agent", 0usize)).as_deref() == Some("Logged in")
@@ -3299,9 +3300,9 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
     let mode = cx
         .find("chat.mode")
         .and_then(|e| e.description().map(String::from));
-    assert_eq!(mode.as_deref(), Some("Auto review"));
+    assert_eq!(mode.as_deref(), Some("Auto"));
     say(cx, "run hi");
-    let run = index_of(cx, "execute Run echo hi ok");
+    let run = index_of(cx, "Run Run echo hi ok");
     cx.click(("chat.item", run));
     assert_eq!(label(cx, ("chat.output", run)).as_deref(), Some("hi\nhi\n"));
     idle(cx);
@@ -3339,19 +3340,19 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
         "the next message resumed the conversation"
     );
     idle(cx);
-    pick(cx, "chat.effort", "high");
+    pick(cx, "chat.effort", "High");
     wait_until(cx, |cx| {
         cx.find("chat.effort")
             .and_then(|e| e.description().map(String::from))
-            == Some("high".into())
+            == Some("High".into())
     });
     // A switch the agent refuses is said, and the bar keeps what the session runs in.
-    pick(cx, "chat.mode", "Workspace");
+    pick(cx, "chat.mode", "Edits");
     wait_for_item(cx, "The agent kept its setting");
     let mode = cx
         .find("chat.mode")
         .and_then(|e| e.description().map(String::from));
-    assert_eq!(mode.as_deref(), Some("Auto review"));
+    assert_eq!(mode.as_deref(), Some("Auto"));
     // The next session, after a Stop, opens with what the agent kept, not the refused pick.
     send("bg", cx);
     wait_until(cx, |cx| pid(cx).is_some_and(|p| p != pid1));
@@ -3360,6 +3361,50 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
     send("model", cx);
     // The model is the one the load kept, the mode the one the agent refused to leave.
     wait_for_item(cx, "gpt-5.5-mini agent");
+}
+
+#[gpui_kit::test]
+fn antigravity_chat_uses_unified_access_labels_and_thought_level(cx: &mut TestAppContext) {
+    use detached_core::adapters::ANTIGRAVITY;
+    let cx = &mut open_seeded(cx, |sb| {
+        let fake = detached_core::testutil::bin("detached-acp", "fake_acp");
+        let cli = detached_core::testutil::claude::fake()
+            .display()
+            .to_string();
+        let config = Config {
+            cli: [
+                (CLAUDE.id.into(), cli),
+                (ANTIGRAVITY.id.into(), fake.display().to_string()),
+            ]
+            .into(),
+            antigravity: true,
+            ..Config::default()
+        };
+        sb.state.set_block(BLOCK, config).unwrap();
+        sb.state
+            .set_block(chat_settings::BLOCK, json!({"provider": "antigravity"}))
+            .unwrap();
+    });
+    assert_eq!(label(cx, "chat.name").as_deref(), Some("Antigravity"));
+    assert_eq!(description(cx, "chat.mode").as_deref(), Some("Auto"));
+    say(cx, "say hello");
+    wait_for_item(cx, "hello");
+    idle(cx);
+    cx.click("chat.model");
+    assert!(menu_item(cx, "Gemini 4 Neon").is_some());
+    assert!(menu_item(cx, "Gemini 4 Neon (no auto)").is_none());
+    cx.press("escape");
+    pick(cx, "chat.mode", "Edits");
+    wait_until(cx, |cx| {
+        description(cx, "chat.mode").as_deref() == Some("Edits")
+    });
+    pick(cx, "chat.effort", "Extra");
+    wait_until(cx, |cx| {
+        description(cx, "chat.effort").as_deref() == Some("Extra")
+    });
+    say(cx, "model; effort");
+    wait_for_item(cx, "gemini-4-neon accept-editsxhigh");
+    wait_for_item(cx, "Gemini 4 Neon · Extra · Done in ");
 }
 
 fn back_to_chat(cx: &mut TestApp) {

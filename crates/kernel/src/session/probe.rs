@@ -34,10 +34,14 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
     let Some(cli) = adapters::find_cli(provider, path, &env) else {
         return Ok(());
     };
-    let adapter = || adapters::installed(&core.data_dir, provider.adapter).current;
-    let installed = match provider.backend {
-        Name::Direct => None,
-        Name::Acp => match adapter() {
+    let adapter = || {
+        provider
+            .adapter()
+            .and_then(|name| adapters::installed(&core.data_dir, name).current)
+    };
+    let installed = match provider.adapter() {
+        None => None,
+        Some(_) => match adapter() {
             Some(version) => Some(version),
             None => return Ok(()),
         },
@@ -86,7 +90,7 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
     else {
         return Ok(());
     };
-    if provider.backend == Name::Acp && opened.commands.is_none() {
+    if provider.backend() == Name::Acp && opened.commands.is_none() {
         let until = deadline.min(Instant::now() + Duration::from_secs(3));
         if let Ok(Event::Update(Update::Commands(commands))) =
             rx.recv_timeout(until.saturating_duration_since(Instant::now()))
@@ -243,5 +247,28 @@ mod tests {
         assert_eq!(retried.commands, Some(vec![]));
         assert_eq!(retried.cli.as_deref(), Some("2.1.400:1.0.1"));
         assert_eq!(std::fs::read_to_string(log).unwrap(), "");
+    }
+
+    #[gpui::test]
+    fn probes_antigravity_without_an_adapter_and_stamps_the_cli_version(cx: &mut TestAppContext) {
+        use detached_core::adapters::ANTIGRAVITY;
+        let cli = detached_acp::testutil::fake();
+        let _f = boot_on(cx, &cli, &[], &ANTIGRAVITY, |core| {
+            core.change_block(adapters::BLOCK, |c: &mut Config| {
+                c.claude = false;
+                c.codex = false;
+                c.antigravity = true;
+            })
+            .unwrap();
+        });
+        let preset = run(cx);
+        let choices = &preset.providers[ANTIGRAVITY.id];
+        assert!(choices.models.iter().any(|m| m.value == "gemini-4-neon"));
+        assert_eq!(choices.efforts, ["low", "medium", "high", "xhigh"]);
+        assert_eq!(
+            choices.account.as_ref().map(|a| a.plan.as_str()),
+            Some("Google AI Pro")
+        );
+        assert_eq!(choices.cli.as_deref(), Some("2.1.400"));
     }
 }

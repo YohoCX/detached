@@ -190,6 +190,16 @@ fn answer(
         }
         session = Some(random());
         entry.session = session.clone();
+    } else if entry.session.is_none() && m["method"] == "server/discover" {
+        return (
+            "200 OK",
+            None,
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": m["id"],
+                "error": {"code": -32601, "message": "Method not found"}
+            })),
+        );
     } else if q
         .header("mcp-session-id")
         .is_none_or(|id| entry.session.as_deref() != Some(id))

@@ -137,7 +137,7 @@ fn run(
 /// Codex on, `fake_acp` its adapter and CLI.
 fn codex(f: &Fixture) {
     let fake = detached_acp::testutil::fake();
-    detached_acp::testutil::install_as(&f.core, CODEX.adapter, &fake, "2.6.0");
+    detached_acp::testutil::install_as(&f.core, CODEX.adapter().unwrap(), &fake, "2.6.0");
     let cli = detached_core::testutil::claude::fake();
     let config = Config {
         cli: [
