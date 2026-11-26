@@ -2,8 +2,8 @@
 
 Images, files and long pastes in the chat, a message queue; files open from the system; an agent starts a Council; a start form a person reads in one pass.
 
-**Status (2026-11-26): drafted from the owner's answers ([decision](docs/decisions/2026-11-26-chat-attachments-council-launch.md)).
-Waits for the Antigravity branch to merge into main, then the tasks start.**
+**Status (2026-11-26): tasks 1–9 and the fixes from the Opus and Astra review merged into main, unbuilt; next the
+owner's check run.**
 
 ## Rulings
 
