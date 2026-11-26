@@ -335,7 +335,7 @@ fn a_start_that_fails_hands_back_its_prompt(cx: &mut TestAppContext) {
     });
     s.read_with(cx, |s, _| {
         assert_eq!(s.returned.as_deref(), Some("hello"));
-        assert!(s.queued.is_none());
+        assert!(s.queue.is_empty());
         assert!(s.unsent.is_none());
         assert!(matches!(s.items.as_slice(), [Item::Error(_)]));
     });

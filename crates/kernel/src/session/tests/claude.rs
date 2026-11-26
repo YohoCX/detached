@@ -710,6 +710,48 @@ fn a_failed_turn_returns_the_queue_and_starts_nothing(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_session_ended_by_trust_hands_its_queue_to_the_next_one_in_order(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    let hook = r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
+    s.update(cx, |s, cx| {
+        s.prompt(format!("config .claude/settings.json {hook};wait go"), cx);
+        s.prompt("say two".into(), cx);
+        s.prompt("say three".into(), cx);
+    });
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.unsent.as_deref(), Some("say two"));
+        assert_eq!(s.queue, [Prompt::from("say three")]);
+        assert!(s.returned.is_none());
+    });
+}
+
+#[gpui::test]
+fn a_prompt_of_attachments_alone_shows_no_empty_message(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    let image = Part::Image {
+        mime: "image/png".into(),
+        data: vec![1],
+    };
+    let prompt = Prompt {
+        text: String::new(),
+        parts: vec![image],
+    };
+    s.update(cx, |s, cx| s.prompt_parts(prompt, cx));
+    wait_until(cx, |cx| s.read(cx).state != State::Running);
+    s.read_with(cx, |s, _| {
+        assert!(!s.items.iter().any(|i| matches!(i, Item::User(_))));
+        assert!(
+            s.items
+                .contains(&Item::Attached(vec![Chip::image("image/png")]))
+        );
+    });
+}
+
+#[gpui::test]
 fn a_queued_prompt_taken_out_leaves_the_rest(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = running_with_two_queued(&f, "wait never", cx);

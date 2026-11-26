@@ -357,7 +357,7 @@ fn resumed_chats_skip_replay_and_show_the_queued_prompt(cx: &mut TestAppContext)
         chat::new_chat(repo.clone(), cx);
         let chat = chat::find(&repo, 0, cx).unwrap();
         let older = chat.update(cx, |chat, cx| {
-            chat.send("first prompt".into(), cx);
+            chat.send("first prompt", cx);
             chat.current().unwrap().clone()
         });
         let first = older.update(cx, |run, cx| {
@@ -366,7 +366,7 @@ fn resumed_chats_skip_replay_and_show_the_queued_prompt(cx: &mut TestAppContext)
             run.end(cx);
             first
         });
-        chat.update(cx, |chat, cx| chat.send("queued-search".into(), cx));
+        chat.update(cx, |chat, cx| chat.send("queued-search", cx));
         let note = Item::Note("resume note".into());
         let reply = Item::Text("new reply".into());
         let run = chat.read(cx).current().unwrap().clone();
@@ -429,7 +429,7 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
             w.dispatch_keystroke(key.clone(), cx);
             chat::find(&repo, n, cx)
                 .unwrap()
-                .update(cx, |chat, cx| chat.send(prompt.into(), cx));
+                .update(cx, |chat, cx| chat.send(prompt, cx));
         });
     };
     let wait_state = |cx: &mut VisualTestContext, n, state| {
