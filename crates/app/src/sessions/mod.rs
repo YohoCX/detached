@@ -347,10 +347,28 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
     } else {
         repo_count(count)
     };
+    let status = |path: &str| Repo::get(cx, path).and_then(Repo::status);
+    // The explorer lists the repos; a row here stays only while one needs a look.
+    let needs_look = |path: &str, state: MemberState| {
+        state != MemberState::Ready || status(path).is_some_and(|s| s.in_progress.is_some())
+    };
+    let changed: usize = match set {
+        Some(set) => set
+            .members
+            .iter()
+            .map(|m| m.path.as_str())
+            .collect::<Vec<_>>(),
+        None => w.session_repos().iter().map(|r| r.path.as_str()).collect(),
+    }
+    .into_iter()
+    .filter_map(status)
+    .map(|s| s.changes.len())
+    .sum();
     let members: Vec<_> = if expanded {
         if let Some(set) = set {
             set.members
                 .iter()
+                .filter(|m| needs_look(&m.path, m.state))
                 .map(|m| {
                     let info = w.name_of(&m.repo);
                     let name = if info == m.repo {
@@ -364,6 +382,7 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
         } else {
             w.session_repos()
                 .iter()
+                .filter(|r| needs_look(&r.path, MemberState::Ready))
                 .map(|r| member(r.name.clone(), &r.path, MemberState::Ready, None, None, cx))
                 .collect()
         }
@@ -371,6 +390,7 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
         vec![]
     };
     let id = id.to_string();
+    let label_id = id.clone();
     let action_id = id.clone();
     let editable = set.is_some();
     let rename = move |window: &mut Window, cx: &mut App| {
@@ -491,6 +511,23 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
                                     .truncate()
                                     .font_family(ui::theme::mono(cx))
                                     .child(branch.to_string()),
+                            )
+                        })
+                        .when(changed > 0, |d| {
+                            let s = if changed == 1 { "" } else { "s" };
+                            d.child(div().flex_1()).child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "sessions.row.{label_id}.changed"
+                                    )))
+                                    .test_support()
+                                    .aria_label(SharedString::from(format!(
+                                        "{changed} changed file{s}"
+                                    )))
+                                    .flex_none()
+                                    .font_family(ui::theme::mono(cx))
+                                    .text_color(t.modified)
+                                    .child(format!("●{changed}")),
                             )
                         }),
                 ),

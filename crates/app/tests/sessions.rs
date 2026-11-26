@@ -1519,7 +1519,7 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_the_rail(
+fn the_live_columns_list_a_session_without_its_ready_repos_and_fold_to_the_rail(
     cx: &mut TestAppContext,
 ) {
     use gpui_kit::{px, size};
@@ -1534,15 +1534,26 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_the_rail(
             .unwrap()
             .bounds()
     };
-    let members = app.workspace(|w, _| {
+    let repos = app.workspace(|w, _| {
         w.session_repos()
             .iter()
-            .map(|r| format!("sessions.member.{}", r.path))
+            .map(|r| r.path.clone())
             .collect::<Vec<_>>()
     });
-    assert_eq!(members.len(), 11);
+    assert_eq!(repos.len(), 11);
+    for path in &repos {
+        let row = SharedString::from(format!("sessions.member.{path}"));
+        assert!(app.find(row).is_none(), "the explorer lists {path}");
+    }
+    assert!(app.find("sessions.row.main.changed").is_none());
+    std::fs::write(PathBuf::from(&repos[0]).join("README.md"), "changed\n").unwrap();
+    let first = repos[0].clone();
+    app.update(|_, cx| kernel::invalidate::status(cx, &first).detach());
+    wait_until(app, |app| {
+        label(app, "sessions.row.main.changed").as_deref() == Some("1 changed file")
+    });
     let archive = bounds(app, "sessions.archive");
-    assert!(bounds(app, &members[10]).bottom() <= archive.top());
+    assert!(bounds(app, "sessions.row.main").bottom() <= archive.top());
     assert!(bounds(app, "sessions").right() <= bounds(app, "session.explorer").left());
     assert!(bounds(app, "session.explorer").right() <= bounds(app, "shell.center").left());
     assert!(app.find("session.overview").unwrap().visible());
@@ -1556,10 +1567,8 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_the_rail(
     assert!(app.find("session.explorer").is_none());
     assert!(app.find("sessions.rows").is_none());
     app.press("secondary-2");
-    wait_until(app, |app| {
-        app.find(SharedString::from(members[10].clone())).is_some()
-    });
-    assert!(bounds(app, &members[10]).bottom() <= bounds(app, "sessions.archive").top());
+    wait_until(app, |app| app.find("sessions.row.main").is_some());
+    assert!(bounds(app, "sessions.row.main").bottom() <= bounds(app, "sessions.archive").top());
     app.press("secondary-0");
     wait_until(app, |app| {
         app.find("tree.changes")

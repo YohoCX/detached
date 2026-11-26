@@ -44,6 +44,11 @@ pub(super) fn row(index: usize, repo: &RepoInfo, monitor: &MonitoredRepo, cx: &A
         _ => ("Loading base…".into(), None),
     };
     let mr_error = monitor.mr_lookup(cx).and_then(|r| r.error.as_ref());
+    let w = Workspace::get(cx);
+    let member = (w.sessions().iter())
+        .find(|s| s.id == w.session_id())
+        .and_then(|s| s.members.iter().find(|m| m.path == repo.path))
+        .map(|m| m.repo.clone());
     let upstream = status
         .and_then(|s| s.as_ref().ok())
         .map(|s| match s.upstream.as_deref() {
@@ -87,6 +92,17 @@ pub(super) fn row(index: usize, repo: &RepoInfo, monitor: &MonitoredRepo, cx: &A
         }
     });
     div()
+        .id(("overview.repo", index))
+        .when_some(member, |d, repo| {
+            d.on_aux_click(move |event, window, cx| {
+                let repo = repo.clone();
+                ui::Menu::default()
+                    .item("Remove from session…", move |_, cx| {
+                        crate::sessions::provision::remove_member(repo.clone(), cx)
+                    })
+                    .show(event.position(), window, cx);
+            })
+        })
         .flex()
         .flex_col()
         .gap(GAP / 4.)
