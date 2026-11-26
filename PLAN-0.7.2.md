@@ -1,6 +1,6 @@
 # Detached — 0.7.2 plan
 
-Images, files and long pastes in the chat; an agent starts a Council; a start form a person reads in one pass.
+Images, files and long pastes in the chat, a message queue; an agent starts a Council; a start form a person reads in one pass.
 
 **Status (2026-11-26): drafted from the owner's answers ([decision](docs/decisions/2026-11-26-chat-attachments-council-launch.md)).
 Waits for the Antigravity branch to merge into main, then the tasks start.**
@@ -46,7 +46,17 @@ Waits for the Antigravity branch to merge into main, then the tasks start.**
 6. **`072/council-form`**: the form in steps (`app/src/council/live.rs` `Form`). Ids stay (`council.form.*`) except
    `council.form.check`, which goes.
 
-Order: 1, 4 and 6 in parallel; 2 and 3 after 1; 5 after 1 (both touch `acp/src/lib.rs`). `ui/` additions (a chip, the
+7. **`072/queue`**: a message queue. Send while a turn runs (or the agent starts) queues the message; `Session.queued`
+   becomes a list of prompts (parts included) in `kernel::session`. The queue shows above the composer as rows with the
+   message's first line, × to drop it, a click to take it back into the input. When a turn ends well, the next queued
+   message goes as its own turn, in order. Stop, or a turn that fails, puts the queued messages back into the input
+   (joined by blank lines), so nothing goes after a broken turn. The queue lives in the session, so switching tabs or
+   sessions keeps it; a restart does not.
+   - Tests in `tests/chat.rs`: two sends during a turn queue two rows; they go one per turn in order; × drops one; a
+     click takes it back; Stop returns them to the input.
+
+Order: 1, 4 and 6 in parallel; 2 and 3 after 1, as one task (one composer area); 5 and 7 after 1 (5 touches
+`acp/src/lib.rs`, 7 `kernel::session`). `ui/` additions (a chip, the
 step block) each in their own commit.
 
 ## Release gate

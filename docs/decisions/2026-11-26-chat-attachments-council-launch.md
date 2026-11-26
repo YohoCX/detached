@@ -5,6 +5,7 @@
 ## Decided
 
 - The chat takes pasted and dropped images, dropped files, and collapses long pastes into a chip with a hover preview.
+- A message sent while the agent works waits in a queue and goes when the turn ends.
 - A dropped file goes in with its contents (text up to 100 KB embedded), not as a bare path; bigger files and
   binaries go as a link.
 - An agent can start a Council. It is configurable: ask each time (the default), start without asking ("if I tell the
