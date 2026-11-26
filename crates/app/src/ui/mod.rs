@@ -10,6 +10,7 @@ pub mod menu;
 pub mod page;
 pub mod popup;
 pub mod segmented;
+pub mod step;
 pub mod suggest;
 pub mod theme;
 pub mod tree;
@@ -32,6 +33,7 @@ pub use icon::{Icon, spinner};
 pub use menu::Menu;
 pub use popup::{DrawnMenu, popup};
 pub use segmented::{segmented, segmented_tips};
+pub use step::step;
 pub use suggest::Suggest;
 pub use theme::{GAP, TAB_TITLE, radius, text, theme};
 
