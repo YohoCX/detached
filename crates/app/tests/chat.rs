@@ -7,7 +7,7 @@ use common::*;
 use detached_app::chat;
 use detached_app::ui::menu;
 use detached_app::ui::theme::chat::{CONVERSATION, PROSE};
-use detached_core::adapters::{BLOCK, CLAUDE, CODEX, Config};
+use detached_core::adapters::{BLOCK, CLAUDE, CODEX, Config, CouncilStart};
 use detached_core::backend::{Model, Tool};
 use detached_core::chat_settings::{self, Preset};
 use gpui_kit::base::test_support::texts;
@@ -3617,4 +3617,82 @@ fn remove_drops_an_attachment(cx: &mut TestAppContext) {
         cx.find("chat.send").unwrap().disabled().is_some(),
         "nothing is left to send"
     );
+}
+
+const COUNCIL: &str =
+    r#"{"action":"council","args":{"mode":"dialectic","over":{"question":"Why?"}}}"#;
+
+fn council_shown(cx: &mut VisualTestContext) -> bool {
+    cx.workspace(|w, _| matches!(w.shown(), Some(Doc::Council { .. })))
+}
+
+fn back_to_the_chat(cx: &mut TestApp) {
+    let repo = cx.sb.solo().display().to_string();
+    cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
+}
+
+fn councils_per(council: CouncilStart) -> impl FnOnce(&Sandbox) {
+    move |sb| {
+        let set = |c: &mut Config| c.council = council;
+        sb.state.change_block(BLOCK, set).unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn an_agent_s_council_asks_first_and_starts_declines_or_stops_asking(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let asks = format!("{} asks to start a Council", CLAUDE.name);
+    say(cx, &format!("act {COUNCIL}"));
+    let i = index_of(cx, &asks);
+    assert!(items(cx)[i].starts_with(&format!("{asks}: Dialectic")));
+    assert!(items(cx)[i].ends_with("waiting"));
+    assert!(!council_shown(cx), "nothing runs before the answer");
+    cx.click(("chat.council.decline", i));
+    wait_for_item(cx, "Declined by the user.");
+    assert!(items(cx)[i].ends_with("declined") && !council_shown(cx));
+    idle(cx);
+
+    say(cx, &format!("act {COUNCIL}"));
+    let i = index_of(cx, "waiting");
+    cx.click(("chat.council.start", i));
+    wait_until(cx, council_shown);
+    back_to_the_chat(cx);
+    wait_for_item(cx, r#""run":"dialectic-"#);
+    assert!(items(cx)[i].ends_with("started"));
+    idle(cx);
+    let setting = |cx: &mut TestApp| cx.settings(|s| s.block::<Config>(BLOCK).unwrap().council);
+    assert_eq!(setting(cx), CouncilStart::Ask);
+
+    say(cx, &format!("act {COUNCIL}"));
+    let i = index_of(cx, "waiting");
+    cx.click(("chat.council.always", i));
+    wait_until(cx, council_shown);
+    assert_eq!(setting(cx), CouncilStart::Free);
+    back_to_the_chat(cx);
+    idle(cx);
+    say(cx, &format!("act {COUNCIL}"));
+    wait_until(cx, council_shown);
+    assert!(!items(cx).iter().any(|i| i.ends_with("waiting")));
+}
+
+#[gpui_kit::test]
+fn an_agent_s_council_starts_at_once_without_asking_and_never_where_it_is_off(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_seeded(cx, councils_per(CouncilStart::Free));
+    say(cx, &format!("act {COUNCIL}"));
+    wait_until(cx, council_shown);
+    back_to_the_chat(cx);
+    wait_for_item(cx, r#""run":"dialectic-"#);
+    assert!(!items(cx).iter().any(|i| i.contains("asks to start")));
+}
+
+#[gpui_kit::test]
+fn an_agent_s_council_is_refused_where_the_setting_is_never(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, councils_per(CouncilStart::Never));
+    say(cx, &format!("act {COUNCIL}"));
+    wait_for_item(cx, "does not let agents start a Council");
+    idle(cx);
+    assert!(!council_shown(cx));
+    assert!(!items(cx).iter().any(|i| i.contains("asks to start")));
 }

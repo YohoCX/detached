@@ -1,7 +1,7 @@
 //! The Agents page: each provider's own CLI, found, checked and logged in from a terminal tab, and an
 //! ACP provider's adapter, installed from the catalog, updated and rolled back.
 
-use detached_core::adapters::{self, Cli, Config, LoginStatus, PROVIDERS};
+use detached_core::adapters::{self, Cli, Config, CouncilStart, LoginStatus, PROVIDERS};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
@@ -304,6 +304,26 @@ impl Render for Page {
             let on = config.shows(r.provider);
             page = page.child(self.provider(i, r, a, on, switch, cx));
         }
+        let options = [
+            (CouncilStart::Ask, "Ask"),
+            (CouncilStart::Free, "Without asking"),
+            (CouncilStart::Never, "Never"),
+        ];
+        let council = item(
+            "Agents start a Council",
+            Some(
+                "A chat's agent asks Detached to start a Council; trust rules stay as they are"
+                    .into(),
+            ),
+            cx,
+        )
+        .child(ui::segmented(
+            "agents.council",
+            &options,
+            config.council,
+            |v, _, cx| kernel::agents::set_council(cx, v).detach(),
+            cx,
+        ));
         let catalog = item(
             labeled("agents.catalog", catalog),
             Some("Signed list of adapter releases".into()),
@@ -321,6 +341,7 @@ impl Render for Page {
             .clone()
             .map(|e| ui::page::error("agents.error", e, cx));
         let rows = [catalog.into_any_element()].into_iter().chain(error);
-        page.child(card(Some("Adapters"), None, rows, cx))
+        page.child(card(Some("Council"), None, [council], cx))
+            .child(card(Some("Adapters"), None, rows, cx))
     }
 }

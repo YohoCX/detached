@@ -250,3 +250,34 @@ fn docs_route_by_read_when_to_one_section_flag_a_stale_doc_and_write_nothing(
         "the host wrote nothing"
     );
 }
+
+#[test]
+fn only_a_chat_may_start_a_council() {
+    use detached_core::backend::Kind as Session;
+    use detached_core::host::{CouncilAct, CouncilOver};
+    let act = Act::Council(CouncilAct {
+        mode: "triage".into(),
+        over: CouncilOver::Mr(1),
+        repo: None,
+        budget: None,
+    });
+    assert_eq!(Identity::of(Session::Chat, "/r").may(&act), Ok(()));
+    let scope = Scope {
+        run: "r".into(),
+        participant: "f1".into(),
+        finding: None,
+    };
+    let participants = [
+        Identity::of(Session::Untrusted, "/r"),
+        Identity::of(Session::Verifier, "/r"),
+        Identity::subject("/r", None),
+        Identity::participant("/r", scope, &["council"]),
+    ];
+    for who in participants {
+        assert_eq!(
+            who.may(&act),
+            Err("A Council participant cannot start a Council.".into())
+        );
+    }
+    assert!(Identity::owner().may(&act).is_err());
+}

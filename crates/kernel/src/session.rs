@@ -313,6 +313,17 @@ fn host_tools(
                     .detach();
                 })
             }
+            Call::Act(Act::Council(c)) => {
+                who.may(&Act::Council(c.clone()))?;
+                Box::new(move |cx| {
+                    let Some(me) = me.upgrade() else {
+                        _ = said.send(Err("The session is gone.".into()));
+                        return;
+                    };
+                    let done = crate::council::launch::start(cx, me, c);
+                    cx.spawn(async move |_| _ = said.send(done.await)).detach();
+                })
+            }
             Call::Act(act @ (Act::Send(_) | Act::Watch(_))) => {
                 who.may(&act)?;
                 Box::new(move |cx| {
@@ -922,6 +933,25 @@ impl Session {
             Answer::Once | Answer::Always => backend::Answer::Allow,
             Answer::Rejected => backend::Answer::Reject,
             Answer::Waiting | Answer::Gone => backend::Answer::Cancel,
+        });
+        cx.notify();
+    }
+
+    /// Asks whether the agent may start a Council; `reply` gets the answer, as of a permission.
+    pub(crate) fn ask_council(
+        &mut self,
+        tool: Tool,
+        reply: backend::Reply,
+        cx: &mut Context<Self>,
+    ) {
+        if self.cancelled {
+            return;
+        }
+        self.replies.insert(self.items.len(), (reply, None));
+        self.items.push(Item::Ask {
+            tool,
+            answer: Answer::Waiting,
+            questions: vec![],
         });
         cx.notify();
     }

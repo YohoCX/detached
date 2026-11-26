@@ -17,6 +17,7 @@ use crate::backend::Probe;
 use crate::error::{Error, Result};
 use crate::git::runner::{Kind, out};
 use crate::git::{self, remotes};
+use crate::host::{CouncilAct, CouncilOver};
 use crate::state::{AppState, Cancel};
 use crate::{forge, trust};
 
@@ -147,6 +148,62 @@ pub fn again(s: &Subject) -> Start {
         },
         head: None,
     }
+}
+
+/// What an agent's act asks for in `repo`: an MR, issue, document or question reads the repo's current branch.
+pub fn start_of(core: &AppState, a: &CouncilAct, repo: &str) -> Result<Start> {
+    let (modes, subject): (&[&str], _) = match &a.over {
+        CouncilOver::Branch { .. } => (&["review", "gate"], "a branch"),
+        CouncilOver::Mr(_) => (&["triage", "review", "gate"], "an MR"),
+        CouncilOver::Issue(_) => (&["triage"], "an issue"),
+        CouncilOver::Document(_) => (&["plan-review"], "a document"),
+        CouncilOver::Question(_) => (&["dialectic", "brainstorm"], "a question"),
+    };
+    if !modes.contains(&a.mode.as_str()) {
+        let ok = modes.join(", ");
+        return Err(Error::Other(format!(
+            "{} does not run over {subject}: use {ok}",
+            a.mode
+        )));
+    }
+    mode::mode(core, Path::new(repo), &a.mode)?;
+    let (branch, base, over) = match &a.over {
+        CouncilOver::Branch { branch, base } => {
+            let base = base.clone().unwrap_or_else(|| "main".into());
+            (branch.clone(), base, Over::Branch)
+        }
+        other => {
+            let at = out(
+                &core.env(),
+                Path::new(repo),
+                &["rev-parse", "--abbrev-ref", "HEAD"],
+                Kind::Read,
+            )?;
+            let at = at.trim().to_string();
+            if at == "HEAD" {
+                return Err(Error::Other(
+                    "The repo's HEAD is detached: check out a branch first".into(),
+                ));
+            }
+            let over = match other {
+                CouncilOver::Mr(n) => Over::Mr(*n),
+                CouncilOver::Issue(n) => Over::Issue(*n),
+                CouncilOver::Document(p) => Over::Document(p.clone()),
+                CouncilOver::Question(q) => Over::Question(q.clone()),
+                CouncilOver::Branch { .. } => unreachable!("matched above"),
+            };
+            (at.clone(), at, over)
+        }
+    };
+    Ok(Start {
+        repo: repo.into(),
+        branch,
+        base,
+        mode: a.mode.clone(),
+        budget: a.budget,
+        over,
+        ..Default::default()
+    })
 }
 
 /// The subject at its two SHAs: the branch's head, and where it left its base. An issue, a
@@ -859,6 +916,38 @@ mod tests {
             "{}",
             p.fingerprint
         );
+    }
+
+    #[test]
+    fn an_act_starts_a_mode_over_its_subject_on_the_current_branch() {
+        let sb = Sandbox::new();
+        let repo = sb.path("r");
+        fs::create_dir_all(&repo).unwrap();
+        sb.git(&repo, &["init", "-q", "-b", "trunk"]);
+        sb.git(&repo, &["commit", "-q", "--allow-empty", "-m", "a"]);
+        let act = |mode: &str, over| CouncilAct {
+            mode: mode.into(),
+            over,
+            repo: None,
+            budget: Some(5),
+        };
+        let at = repo.display().to_string();
+        let q = act("dialectic", CouncilOver::Question("why".into()));
+        let s = start_of(&sb.state, &q, &at).unwrap();
+        assert_eq!((s.branch.as_str(), s.budget), ("trunk", Some(5)));
+        assert_eq!(s.over, Over::Question("why".into()));
+        let b = CouncilOver::Branch {
+            branch: "f".into(),
+            base: None,
+        };
+        assert_eq!(
+            start_of(&sb.state, &act("gate", b.clone()), &at)
+                .unwrap()
+                .base,
+            "main"
+        );
+        let wrong = start_of(&sb.state, &act("dialectic", b), &at).unwrap_err();
+        assert!(wrong.to_string().contains("review, gate"), "{wrong}");
     }
 
     #[test]

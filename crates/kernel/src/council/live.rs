@@ -181,6 +181,25 @@ pub struct Council {
     tasks: Vec<Task<()>>,
 }
 
+/// "Review `feature/x`", "Triage !7".
+pub fn title(s: &Start) -> String {
+    let mut mode = s.mode.replace('-', " ");
+    if let Some(c) = mode.get_mut(..1) {
+        c.make_ascii_uppercase();
+    }
+    let what = match &s.over {
+        Over::Branch => format!("`{}`", s.branch),
+        Over::Mr(n) => format!("!{n}"),
+        Over::Issue(n) => format!("#{n}"),
+        Over::Document(path) => format!("`{path}`"),
+        Over::Question(q) => match q.chars().count() > 40 {
+            true => format!("“{}…”", q.chars().take(40).collect::<String>().trim_end()),
+            false => format!("“{q}”"),
+        },
+    };
+    format!("{mode} {what}")
+}
+
 /// Starts a run: its trees and record are made off the main thread, then its finders queue.
 pub fn start(s: Start, cx: &mut App) -> Entity<Council> {
     let run = run::id(&s.mode);
@@ -252,23 +271,8 @@ impl Council {
         self.tasks.push(cx.spawn(f));
     }
 
-    /// "Review `feature/x`", "Triage !7".
     pub fn title(&self) -> String {
-        let mut mode = self.start.mode.replace('-', " ");
-        if let Some(c) = mode.get_mut(..1) {
-            c.make_ascii_uppercase();
-        }
-        let what = match &self.start.over {
-            Over::Branch => format!("`{}`", self.start.branch),
-            Over::Mr(n) => format!("!{n}"),
-            Over::Issue(n) => format!("#{n}"),
-            Over::Document(path) => format!("`{path}`"),
-            Over::Question(q) => match q.chars().count() > 40 {
-                true => format!("“{}…”", q.chars().take(40).collect::<String>().trim_end()),
-                false => format!("“{q}”"),
-            },
-        };
-        format!("{mode} {what}")
+        title(&self.start)
     }
 
     fn now(cx: &App) -> Instant {
@@ -847,7 +851,7 @@ impl Council {
                 cx,
             ),
             // A participant may not: `Identity::may` refuses it first.
-            Act::Proc(_) | Act::Send(_) | Act::Watch(_) => {}
+            Act::Proc(_) | Act::Send(_) | Act::Watch(_) | Act::Council(_) => {}
         }
     }
 

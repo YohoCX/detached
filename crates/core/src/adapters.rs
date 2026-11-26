@@ -47,8 +47,19 @@ pub struct Config {
     pub claude: bool,
     pub codex: bool,
     pub antigravity: bool,
+    /// Whether a chat's agent may start a Council.
+    pub council: CouncilStart,
     #[serde(flatten)]
     pub other: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CouncilStart {
+    #[default]
+    Ask,
+    Free,
+    Never,
 }
 
 impl Default for Config {
@@ -58,6 +69,7 @@ impl Default for Config {
             claude: true,
             codex: false,
             antigravity: false,
+            council: CouncilStart::default(),
             other: BTreeMap::new(),
         }
     }

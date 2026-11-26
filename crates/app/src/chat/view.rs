@@ -31,11 +31,12 @@ use crate::files::{DragFile, Links, Markdown};
 use crate::ui::theme::chat as size;
 use crate::ui::{self, DrawnMenu, Icon, radius, text, theme};
 use crate::util::{age, folder_name, now, span, status_of};
-use detached_core::adapters::{LoginStatus, Provider, RepoTrust};
+use detached_core::adapters::{CouncilStart, LoginStatus, Provider, RepoTrust};
 use detached_core::chat_settings::Preset;
 use kernel::activity::Activity;
 use kernel::agents::Agents;
 use kernel::blocking;
+use kernel::council::launch;
 use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::inbox::{self, Messages};
 use kernel::resource::Interest;
@@ -1753,11 +1754,21 @@ impl ChatView {
             Answer::Gone => "no answer",
         };
         let asking = questions.is_empty();
-        let name = self.session.read(cx).provider.name;
-        let title = match asking {
-            true => format!("{name} asks to use {}", kind(tool)),
-            false => format!("{name} asks"),
+        let council = tool.kind.as_deref() == Some(launch::KIND);
+        let state = match (council, answer) {
+            (true, Answer::Once) => "started",
+            (true, Answer::Always) => "started; agents start a Council without asking from now on",
+            (true, Answer::Rejected) => "declined",
+            _ => state,
         };
+        let name = self.session.read(cx).provider.name;
+        let title = match (council, asking) {
+            (true, _) => format!("{name} asks to start a Council"),
+            (_, true) => format!("{name} asks to use {}", kind(tool)),
+            _ => format!("{name} asks"),
+        };
+        let lines = council.then(|| council_lines(tool)).into_iter().flatten();
+        let lines = lines.map(|l| div().text_size(text::SMALL).text_color(t.muted).child(l));
         let detail = title_of(tool, asking);
         let open = answer == Answer::Waiting;
         let key = (self.session.read(cx).sessions[at.0].entity_id(), at.1);
@@ -1866,6 +1877,23 @@ impl ChatView {
         let buttons = open.then(|| {
             let b = div().flex().gap(px(8.));
             match asking {
+                true if council => {
+                    let session = self.session.clone();
+                    let always = ui::button(("chat.council.always", i), "Always", cx)
+                        .test_support()
+                        .on_click(move |_, _, cx| {
+                            kernel::agents::set_council(cx, CouncilStart::Free).detach();
+                            session.update(cx, |s, cx| s.answer(at, Answer::Always, cx))
+                        });
+                    b.child(button("chat.council.start", "Start", true, Answer::Once))
+                        .child(always)
+                        .child(button(
+                            "chat.council.decline",
+                            "Decline",
+                            false,
+                            Answer::Rejected,
+                        ))
+                }
                 true => b
                     .child(button("chat.allow", "Allow", true, Answer::Once))
                     .child(button("chat.always", "Always allow", false, Answer::Always))
@@ -1912,6 +1940,7 @@ impl ChatView {
                         .child(detail.clone()),
                 )
             })
+            .children(lines)
             .children(rows)
             .children(buttons)
             .when(!open, |b| {
@@ -2572,6 +2601,28 @@ impl ToolState {
             .child(icon.size(text::SMALL))
             .into_any_element()
     }
+}
+
+/// What a Council's ask tells the person besides its subject: the estimate and the trust.
+fn council_lines(t: &Tool) -> Vec<String> {
+    let get = |k: &str| t.input.as_ref().and_then(|i| i.get(k));
+    let estimate = match get("estimate").and_then(|e| e.as_u64()) {
+        Some(e) => format!("About {} tokens, from earlier runs", tokens(e)),
+        None => "No estimate: no earlier run of this mode".into(),
+    };
+    let why = get("why").and_then(|w| w.as_str()).unwrap_or_default();
+    let trust = match get("trusted").and_then(|w| w.as_bool()) {
+        Some(true) => format!("Trusted: {why}"),
+        _ => format!("Untrusted: {why}. It runs sandboxed and read-only."),
+    };
+    let mut lines = vec![estimate, trust];
+    if get("unaccepted").and_then(|w| w.as_bool()) == Some(true) {
+        lines.push(
+            "Its agent settings are not accepted: Claude stands in where Codex would load them."
+                .into(),
+        );
+    }
+    lines
 }
 
 fn tokens(n: u64) -> String {
