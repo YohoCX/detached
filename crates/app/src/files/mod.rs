@@ -20,7 +20,7 @@ use crate::actions::{self, Group, Registration};
 use crate::dock::{self, AppSpec};
 use changes::Changes;
 use tree::Tree;
-pub(crate) use tree::{ExplorerMode, choose_explorer, explorer_mode};
+pub(crate) use tree::{DragFile, ExplorerMode, choose_explorer, explorer_mode};
 use viewer::ViewerDocs;
 
 pub(crate) fn explorer(window: &mut Window, cx: &mut App) -> AnyView {
