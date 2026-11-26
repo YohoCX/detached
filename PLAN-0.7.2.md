@@ -1,6 +1,6 @@
 # Detached — 0.7.2 plan
 
-Images, files and long pastes in the chat, a message queue; an agent starts a Council; a start form a person reads in one pass.
+Images, files and long pastes in the chat, a message queue; files open from the system; an agent starts a Council; a start form a person reads in one pass.
 
 **Status (2026-11-26): drafted from the owner's answers ([decision](docs/decisions/2026-11-26-chat-attachments-council-launch.md)).
 Waits for the Antigravity branch to merge into main, then the tasks start.**
@@ -54,6 +54,20 @@ Waits for the Antigravity branch to merge into main, then the tasks start.**
    sessions keeps it; a restart does not.
    - Tests in `tests/chat.rs`: two sends during a turn queue two rows; they go one per turn in order; × drops one; a
      click takes it back; Stop returns them to the input.
+
+8. **`072/open-files`**: Detached opens files from the system (Finder, Explorer, the file manager, `open -a`).
+   - It registers as the default handler for code and Markdown (md, markdown, txt, ts, tsx, js, jsx, mjs, cjs, json,
+     jsonc, yaml, yml, toml, rs, py, go, java, kt, swift, c, h, cpp, hpp, cs, rb, php, sh, zsh, bash, fish, css, scss,
+     html, xml, sql, vue, svelte, lua, dart): `cargo-packager`'s file associations in `crates/app/Cargo.toml` for the
+     macOS bundle, the NSIS installer and the deb's `.desktop`; the OS still asks the person where it asks.
+   - macOS: GPUI's `on_open_urls` takes the files, at launch and while running. Windows and Linux: the paths come as
+     arguments; a second process hands them to the running one over the socket `detached-cli` uses and exits.
+   - A file inside a workspace repo opens as its usual tab, in the session that holds it (Main checkouts for a main
+     checkout). Any other file opens as a plain tab: view and edit, no diff or history; when it is inside a git repo the
+     tab offers "Add <repo> to the workspace".
+   - Tests: the routing (repo file vs loose file) in a UI test through the same entry point the OS calls; the
+     argument hand-off as a unit test; the bundle's associations by reading the packaged `Info.plist` in `make e2e-app`
+     only if cheap, otherwise said in the commit.
 
 Order: 1, 4 and 6 in parallel; 2 and 3 after 1, as one task (one composer area); 5 and 7 after 1 (5 touches
 `acp/src/lib.rs`, 7 `kernel::session`). `ui/` additions (a chip, the
