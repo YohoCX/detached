@@ -104,6 +104,14 @@ impl Identity {
         }
     }
 
+    /// A Fix's agent: a chat's, without a Council of its own.
+    pub fn fix() -> Identity {
+        Identity {
+            can: &["proc", "send", "watch"],
+            ..Identity::owner()
+        }
+    }
+
     /// The repos it reads: its own, or the current workspace's.
     pub fn repos<'a>(&'a self, cx: &'a App) -> &'a [RepoInfo] {
         self.repos

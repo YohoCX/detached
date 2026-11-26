@@ -13,6 +13,7 @@ use detached_core::state::{AppState, Cancel};
 use detached_core::update::Progress;
 use gpui::{App, AppContext, Context, Entity, Global};
 
+use crate::activity::Activity;
 use crate::blocking;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -390,12 +391,20 @@ impl Agents {
     }
 }
 
-/// Sets whether agents may start a Council; the settings snapshot follows.
-pub fn set_council(cx: &App, start: CouncilStart) -> gpui::Task<Result<()>> {
+/// Sets whether agents may start a Council; the settings snapshot follows. A failure is said
+/// through Activity, and the task's answer is whether it saved.
+pub fn set_council(cx: &App, start: CouncilStart) -> gpui::Task<bool> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || {
+    let saved = blocking::run(cx, move || {
         core.change_block(BLOCK, |c: &mut Config| c.council = start)
             .map(drop)
+    });
+    cx.spawn(async move |cx| {
+        let Err(e) = saved.await else { return true };
+        let say =
+            |cx: &mut App| Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx));
+        cx.update(say);
+        false
     })
 }
 

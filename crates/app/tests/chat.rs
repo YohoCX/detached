@@ -3696,3 +3696,52 @@ fn an_agent_s_council_is_refused_where_the_setting_is_never(cx: &mut TestAppCont
     assert!(!council_shown(cx));
     assert!(!items(cx).iter().any(|i| i.contains("asks to start")));
 }
+
+#[gpui_kit::test]
+fn a_council_ask_shows_the_repo_the_whole_subject_and_the_budget(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let q = "Why does the cache grow without bound when entries expire early?";
+    let act = json!({"action": "council", "args": {"mode": "dialectic", "budget": 5000,
+        "over": {"question": q}}});
+    say(cx, &format!("act {act}"));
+    let i = index_of(cx, "waiting");
+    let card = items(cx)[i].clone();
+    for want in ["Repo: ", &format!("Question: {q}"), "Budget: 5.0k tokens"] {
+        assert!(card.contains(want), "{want}: {card}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_trusted_subject_with_unaccepted_settings_offers_no_start(cx: &mut TestAppContext) {
+    use detached_core::council::marks::{self, Council, Mark};
+    let cx = &mut open_seeded(cx, |sb| {
+        let r = sb.solo();
+        sb.git(&r, &["switch", "-qc", "feat"]);
+        std::fs::create_dir_all(r.join(".claude")).unwrap();
+        let hook = r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}"#;
+        sb.commit(&r, ".claude/settings.json", hook, "settings");
+        sb.git(&r, &["switch", "-q", "main"]);
+        let mark = Mark {
+            name: r.display().to_string(),
+            ..Mark::default()
+        };
+        let p = Council {
+            repos: vec![mark],
+            ..Council::default()
+        };
+        sb.state.set_block(marks::BLOCK, p).unwrap();
+    });
+    let act = json!({"action": "council", "args": {"mode": "review",
+        "over": {"branch": {"branch": "feat"}}}});
+    say(cx, &format!("act {act}"));
+    let i = index_of(cx, "waiting");
+    assert!(items(cx)[i].contains("accept them in the Council form"));
+    assert!(cx.find(("chat.council.start", i)).is_none());
+    assert!(cx.find(("chat.council.always", i)).is_none());
+    cx.click(("chat.council.decline", i));
+    wait_for_item(
+        cx,
+        "agent settings are not accepted; ask the user to accept them in Council",
+    );
+    assert!(!council_shown(cx));
+}
