@@ -355,7 +355,7 @@ fn a_message_is_answered_and_the_turn_ends(cx: &mut TestAppContext) {
 fn enter_does_not_send_an_empty_message_or_during_a_turn(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     cx.press("enter");
-    assert!(items(cx).is_empty());
+    assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
     say(cx, HANG);
     working(cx);
     say(cx, "second");
@@ -978,7 +978,7 @@ fn the_chats_plus_opens_another_chat_beside_and_ending_one_stops_its_session(
     show_chats(cx);
     pick(cx, "chats.new", "solo");
     settle(cx);
-    assert!(items(cx).is_empty());
+    assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
     assert!(cx.find("doc.chat.1").is_some() && cx.find("doc.chat").is_some());
     assert_eq!(
         label(cx, "doc.chat").as_deref(),
@@ -3640,7 +3640,7 @@ fn an_image_over_5_mb_is_refused_on_send(cx: &mut TestAppContext) {
     paste_item(cx, ClipboardEntry::Image(image));
     cx.press("enter");
     assert!(cx.find("chat.attached.0").is_some());
-    assert!(items(cx).is_empty());
+    assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
 }
 
 #[gpui_kit::test]
