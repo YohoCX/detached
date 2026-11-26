@@ -11,7 +11,7 @@ use detached_core::types::RepoInfo;
 use detached_core::watch::{Batch, Watcher};
 use futures::StreamExt;
 use futures::channel::{mpsc, oneshot};
-use gpui::{App, Context, Global, Subscription, Task};
+use gpui::{App, BorrowAppContext, Context, Global, Subscription, Task};
 
 use crate::activity::{Activity, OpEnded};
 use crate::blocking;
@@ -239,7 +239,7 @@ pub fn rescanning(cx: &App) -> bool {
 pub fn activated(cx: &mut App) {
     cx.default_global::<Away>().1 = false;
     cx.default_global::<Activations>();
-    cx.update_global(|a: &mut Activations, _| a.0 += 1);
+    cx.update_global::<Activations, _>(|a, _| a.0 += 1);
     pass(cx, false);
     resource::input(cx, Input::Activated);
     if cx.has_global::<Watch>() {

@@ -632,8 +632,11 @@ fn a_working_tree_file_is_edited_and_saved_and_a_ref_file_is_read_only(cx: &mut 
     assert_eq!(editor_text(cx), Some(readme_text(&[])));
     assert!(!readme_changed(cx));
 
+    let readme = app.join("README.md");
+    let text = std::fs::read_to_string(&readme).unwrap();
+    std::fs::write(&readme, format!("{text}worktree\n")).unwrap();
     open(cx, &app, None, "README.md", Some(1));
-    shown(cx, "line 60");
+    shown(cx, "worktree");
     cx.input("X");
     wait_until(cx, readme_changed);
     cx.press("secondary-s");

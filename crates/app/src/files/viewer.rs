@@ -30,6 +30,8 @@ enum Shown {
 
 pub struct Viewer {
     shown: Option<Shown>,
+    /// An archived tab's: its file is not edited.
+    pub(super) read_only: bool,
     _actions: Vec<Registration>,
 }
 
@@ -53,6 +55,7 @@ impl Viewer {
         ];
         Viewer {
             shown: None,
+            read_only: false,
             _actions: actions,
         }
     }
@@ -76,7 +79,8 @@ impl Viewer {
                     view.update(cx, |v, cx| v.show(loc, window, cx));
                 } else {
                     let viewer = cx.entity_id();
-                    let view = cx.new(|cx| FileView::new(viewer, loc, window, cx));
+                    let read_only = self.read_only;
+                    let view = cx.new(|cx| FileView::new(viewer, loc, read_only, window, cx));
                     self.shown = Some(Shown::File(view));
                 }
             }
@@ -214,9 +218,12 @@ impl DocKind for ViewerDocs {
         }
     }
 
-    fn view(&self, doc: &mut Doc, _: bool, window: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, read_only: bool, window: &mut Window, cx: &mut App) -> AnyView {
         let v = cx.new(Viewer::new);
-        v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx));
+        v.update(cx, |v, cx| {
+            v.read_only = read_only;
+            v.show(Some(doc.clone()), window, cx)
+        });
         v.into()
     }
 

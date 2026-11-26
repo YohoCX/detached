@@ -25,40 +25,43 @@ use kernel::workspace::Workspace;
 use crate::ui::theme::{GAP, text};
 use crate::ui::{self, Edge, theme};
 
-/// What a run can be over, and the modes each takes with what it does, the first the default.
-const SUBJECTS: [(&str, &[(&str, &str, &str)]); 5] = [
+/// A mode: its id, its name and what it does.
+type ModeRow = (&'static str, &'static str, &'static str);
+
+/// What a run can be over, and the modes each takes, the first the default.
+const SUBJECTS: [(&str, &[ModeRow]); 5] = [
     ("Branch", &[REVIEW, GATE]),
     ("MR", &[TRIAGE, REVIEW, GATE]),
     ("Issue", &[TRIAGE]),
     ("Document", &[PLAN_REVIEW]),
     ("Question", &[DIALECTIC, BRAINSTORM]),
 ];
-const REVIEW: (&str, &str, &str) = (
+const REVIEW: ModeRow = (
     "review",
     "Review",
     "Find bugs and design issues; a second pass verifies each finding",
 );
-const GATE: (&str, &str, &str) = (
+const GATE: ModeRow = (
     "gate",
     "Gate",
     "Is it OK to merge: a review that blocks on critical or major findings",
 );
-const TRIAGE: (&str, &str, &str) = (
+const TRIAGE: ModeRow = (
     "triage",
     "Triage",
     "What to do with it: the facts from the code and the case for and against",
 );
-const PLAN_REVIEW: (&str, &str, &str) = (
+const PLAN_REVIEW: ModeRow = (
     "plan-review",
     "Plan review",
     "Check the plan against the code it plans for, with the edit that fixes each problem",
 );
-const DIALECTIC: (&str, &str, &str) = (
+const DIALECTIC: ModeRow = (
     "dialectic",
     "Dialectic",
     "Two sides argue the question from the code and rebut each other, then a verdict",
 );
-const BRAINSTORM: (&str, &str, &str) = (
+const BRAINSTORM: ModeRow = (
     "brainstorm",
     "Brainstorm",
     "Several framings propose ideas for the question, clustered and ranked",
@@ -591,7 +594,7 @@ impl Render for Form {
             .test_support()
             .flex()
             .flex_col()
-            .flex_shrink()
+            .flex_shrink_1()
             .min_h_0()
             .gap(GAP)
             .p(GAP)

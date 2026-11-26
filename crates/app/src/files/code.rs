@@ -217,17 +217,18 @@ impl Render for Code {
         let bar = self.external.is_some().then(|| {
             let t = theme(cx);
             let text = "Changed on disk";
-            let reload = ui::button("code.reload", "Reload", cx).on_click(cx.listener(
-                |this, _, window, cx| {
+            let reload = ui::button("code.reload", "Reload", cx)
+                .test_support()
+                .on_click(cx.listener(|this, _, window, cx| {
                     let text = this.external.take().unwrap_or_default();
                     this.editor
                         .update(cx, |e, cx| e.set_value(text.clone(), window, cx));
                     (this.dirty, this.disk) = (false, text);
                     cx.notify();
-                },
-            ));
-            let keep =
-                ui::button("code.keep", "Keep mine", cx).on_click(cx.listener(|this, _, _, cx| {
+                }));
+            let keep = ui::button("code.keep", "Keep mine", cx)
+                .test_support()
+                .on_click(cx.listener(|this, _, _, cx| {
                     this.disk = this.external.take().unwrap_or_default();
                     cx.notify();
                 }));

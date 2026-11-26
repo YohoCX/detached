@@ -161,6 +161,10 @@ fn the_empty_state_adds_folders_and_creates_default(cx: &mut TestAppContext) {
     });
     wait_until(cx, |cx| cx.workspace(|w, _| w.session_repos().len() == 5));
     let (ws, solo) = (path(cx.sb.ws()), path(cx.sb.solo()));
+    // The settings snapshot reloads after the workspace takes the folders.
+    wait_until(cx, |cx| {
+        cx.settings(|s| s.workspaces.first().is_some_and(|w| w.folders.len() == 2))
+    });
     let w = cx.settings(|s| s.workspaces.clone());
     assert_eq!(w.len(), 1);
     assert_eq!((w[0].name.as_str(), w[0].active), ("Default", true));

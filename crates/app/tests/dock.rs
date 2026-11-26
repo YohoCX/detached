@@ -737,6 +737,7 @@ fn every_registered_kind_has_a_registered_category(cx: &mut TestAppContext) {
             id: "id".into(),
             title: "title".into(),
         },
+        Doc::Loose("/r/notes.md".into()),
     ];
     cx.update(|_, cx| {
         let known = ["docs", "chats", "code"];

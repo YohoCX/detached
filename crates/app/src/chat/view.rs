@@ -1859,8 +1859,11 @@ impl ChatView {
             (_, true) => format!("{name} asks to use {}", kind(tool)),
             _ => format!("{name} asks"),
         };
-        let lines = council.then(|| council_lines(tool)).into_iter().flatten();
-        let lines = lines.map(|l| div().text_size(text::SMALL).text_color(t.muted).child(l));
+        let said = if council { council_lines(tool) } else { vec![] };
+        let detail_lines: String = said.iter().map(|l| format!(" {l}")).collect();
+        let lines = said
+            .into_iter()
+            .map(|l| div().text_size(text::SMALL).text_color(t.muted).child(l));
         let detail = title_of(tool, asking);
         let open = answer == Answer::Waiting;
         let key = (self.session.read(cx).sessions[at.0].entity_id(), at.1);
@@ -1990,7 +1993,7 @@ impl ChatView {
                                 } else {
                                     Answer::Once
                                 };
-                                session.update(cx, |s, cx| s.answer(at, a, cx)).ok();
+                                session.update(cx, |s, cx| s.answer(at, a, cx));
                             })
                             .detach();
                         });
@@ -2031,7 +2034,9 @@ impl ChatView {
         div()
             .id(("chat.item", i))
             .test_support()
-            .aria_label(SharedString::from(format!("{title}: {detail} {state}")))
+            .aria_label(SharedString::from(format!(
+                "{title}: {detail}{detail_lines} {state}"
+            )))
             .flex()
             .flex_col()
             .gap(px(8.))

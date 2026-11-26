@@ -131,16 +131,16 @@ impl Render for Loose {
             let name = folder_name(&root.to_string_lossy()).to_string();
             let root = root.to_string_lossy().into_owned();
             let path = PathBuf::from(&self.path);
-            ui::button("loose.add", format!("Add {name} to the workspace"), cx).on_click(
-                move |_, _, cx| {
+            ui::button("loose.add", format!("Add {name} to the workspace"), cx)
+                .test_support()
+                .on_click(move |_, _, cx| {
                     let (path, added) = (path.clone(), crate::repos::add_folder(root.clone(), cx));
                     cx.spawn(async move |cx| {
                         added.await;
                         cx.update(|cx| super::open_paths(cx, vec![path]));
                     })
                     .detach();
-                },
-            )
+                })
         });
         let shown = self.path.replace('\\', "/");
         div()

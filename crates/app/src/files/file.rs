@@ -31,6 +31,7 @@ enum Body {
 pub(super) struct FileView {
     viewer: EntityId,
     loc: Location,
+    read_only: bool,
     code: Entity<Code>,
     body: Body,
     /// A markdown file's preview, in place of its source.
@@ -52,6 +53,7 @@ impl FileView {
     pub(super) fn new(
         viewer: EntityId,
         loc: Location,
+        read_only: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -91,6 +93,7 @@ impl FileView {
         });
         let mut view = FileView {
             viewer,
+            read_only,
             loc,
             code: cx.new(|cx| Code::new(window, cx)),
             body: Body::Loading,
@@ -139,6 +142,8 @@ impl FileView {
         self.loc = loc;
         self.restored = None;
         self.reveal = true;
+        // Until the new text lands, keys would edit the old one.
+        self.code.update(cx, |c, cx| c.set_editable(false, cx));
         self.load(window, cx);
         cx.notify();
     }
@@ -174,7 +179,7 @@ impl FileView {
         let (path, line) = (&self.loc.path, self.loc.line.unwrap_or(1));
         let shown = reveal && crate::dock::is_doc_view_shown(self.viewer, cx);
         let restored = self.restored.take();
-        let editable = self.loc.rev.is_none();
+        let editable = self.loc.rev.is_none() && !self.read_only;
         self.code.update(cx, |c, cx| {
             c.set_editable(editable, cx);
             c.set(path, &text, !reveal, window, cx);

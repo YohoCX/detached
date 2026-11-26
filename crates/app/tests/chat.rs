@@ -3611,9 +3611,17 @@ fn a_file_with_nul_bytes_goes_as_a_link(cx: &mut TestAppContext) {
     wait_until(cx, |cx| {
         label(cx, "chat.attached.0").as_deref() == Some("nul.dat · 5 B")
     });
-    cx.input("fake: parts");
-    cx.press("enter");
-    wait_for_item(cx, "link");
+    say(cx, "parts");
+    wait_for_item(cx, "Attached: nul.dat");
+    cx.update(|_, cx| {
+        let link = kernel::session::all(cx).any(|s| {
+            s.read(cx).items.iter().any(|i| {
+                matches!(i, kernel::session::Item::Attached(c)
+                    if c[0].kind == detached_core::backend::ChipKind::Link)
+            })
+        });
+        assert!(link, "a file with NUL bytes goes as a link");
+    });
 }
 
 #[gpui_kit::test]

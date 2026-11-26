@@ -3,7 +3,7 @@
 use gpui_kit::base::{TestSupportExt, TestTextExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Role, SharedString,
+    App, Div, ElementId, InteractiveElement, ParentElement, Role, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder,
 };
 

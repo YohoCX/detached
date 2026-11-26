@@ -1492,6 +1492,7 @@ fn update(provider: &Provider, u: SessionUpdate) -> Option<Update> {
                 let (uri, kind) = match r.resource {
                     EmbeddedResourceResource::TextResourceContents(t) => (t.uri, ChipKind::Text),
                     EmbeddedResourceResource::BlobResourceContents(b) => (b.uri, ChipKind::Link),
+                    _ => return None,
                 };
                 let name = uri_name(&uri);
                 Update::Attached(vec![Chip { name, kind }])

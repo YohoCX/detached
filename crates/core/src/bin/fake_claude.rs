@@ -219,10 +219,11 @@ fn main() {
                 let blocks = content.as_array().cloned().unwrap_or_default();
                 let text = match content.as_str() {
                     Some(t) => t.to_string(),
+                    // The first text block is the typed prompt; the rest are attached files.
                     None => (blocks.iter())
-                        .filter_map(|b| b["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                        .find_map(|b| b["text"].as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                 };
                 let kinds: Vec<String> = blocks
                     .iter()
