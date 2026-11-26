@@ -1206,8 +1206,10 @@ fn a_background_task_shows_until_it_is_stopped(cx: &mut TestAppContext) {
         Some("Background: npm run dev")
     );
     idle(cx);
+    assert_eq!(label(cx, "doc.chat.state").as_deref(), Some("Working"));
     cx.click(("chat.task.stop", 0usize));
     wait_until(cx, |cx| cx.find(("chat.task", 0usize)).is_none());
+    wait_until(cx, |cx| cx.find("doc.chat.state").is_none());
 }
 
 #[gpui_kit::test]

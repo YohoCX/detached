@@ -587,7 +587,8 @@ impl Chat {
         if s.items.iter().any(waiting) {
             return State::Waiting;
         }
-        if s.busy() {
+        // A background task can wake the agent again, so the chat is not done while one runs.
+        if s.busy() || !s.tasks.is_empty() {
             return State::Working;
         }
         let mut all = (self.sessions.iter().rev()).flat_map(|s| s.read(cx).items.iter().rev());
