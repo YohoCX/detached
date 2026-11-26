@@ -5,7 +5,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::*;
-use crate::backend::{Tool, TurnConfig};
+use crate::backend::{ChipKind, Tool, TurnConfig};
 
 const SUBAGENT: &str = "36022712-0b82-4d34-ae53-41a19e20f5e9";
 const COMPACTION: &str = "479bb84f-197d-4dc6-a6f8-6777d8a2bb05";
@@ -290,4 +290,48 @@ fn a_user_image_comes_back_as_a_chip_before_the_text_it_came_with() {
     updates(&l, &mut HashMap::new(), &mut out, false);
     let chip = Update::Attached(vec![crate::backend::Chip::image("image/png")]);
     assert_eq!(out, [chip, Update::User("look".into())]);
+}
+
+#[test]
+fn a_user_file_comes_back_as_a_chip_and_texts_stay_apart() {
+    let file = |p: Part| json!({"type": "text", "text": p.as_text().unwrap()});
+    let whole = Part::File {
+        path: "/a/b.txt".into(),
+        text: Some("hi\n```\nx".into()),
+    };
+    let link = Part::File {
+        path: "/a/c d.rs".into(),
+        text: None,
+    };
+    let text = |t: &str| json!({"type": "text", "text": t});
+    let content = json!([
+        text("look"),
+        file(whole),
+        text("and"),
+        file(link),
+        text("more")
+    ]);
+    let l = json!({"type": "user", "message": {"content": content}});
+    let mut out = vec![];
+    updates(&l, &mut HashMap::new(), &mut out, false);
+    let chip = |name: &str, kind| {
+        Update::Attached(vec![Chip {
+            name: name.into(),
+            kind,
+        }])
+    };
+    assert_eq!(
+        out,
+        [
+            Update::User("look".into()),
+            chip("b.txt", ChipKind::Text),
+            Update::User("and".into()),
+            chip("c d.rs", ChipKind::Link),
+            Update::User("more".into()),
+        ]
+    );
+    let only = json!({"type": "user", "message": {"content": [file(Part::File { path: "/x".into(), text: None })]}});
+    let mut out = vec![];
+    updates(&only, &mut HashMap::new(), &mut out, false);
+    assert_eq!(out, [chip("x", ChipKind::Link)]);
 }

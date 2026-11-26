@@ -733,8 +733,37 @@ impl Demux {
 
 fn uri(path: &Path) -> String {
     let p = path.to_string_lossy().replace('\\', "/");
-    let p = p.replace('%', "%25").replace(' ', "%20");
-    format!("file://{}{p}", if p.starts_with('/') { "" } else { "/" })
+    let mut out = String::from("file://");
+    out.push_str(if p.starts_with('/') { "" } else { "/" });
+    for b in p.bytes() {
+        match b {
+            b if b.is_ascii_alphanumeric() || b"-._~/:".contains(&b) => out.push(b as char),
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// A URI's last segment, percent-decoded.
+fn uri_name(uri: &str) -> String {
+    let seg = uri.rsplit('/').next().unwrap_or_default().as_bytes();
+    let (mut out, mut i) = (vec![], 0);
+    while i < seg.len() {
+        let hex = seg
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        match (seg[i], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn pin_full(options: &mut [Config]) {
@@ -1455,7 +1484,18 @@ fn text(c: ContentChunk) -> Option<String> {
 fn update(provider: &Provider, u: SessionUpdate) -> Option<Update> {
     Some(match u {
         SessionUpdate::UserMessageChunk(c) => match c.content {
-            ContentBlock::Text(t) => Update::User(t.text),
+            ContentBlock::Text(t) => match Part::chip_of_text(&t.text) {
+                Some(chip) => Update::Attached(vec![chip]),
+                None => Update::User(t.text),
+            },
+            ContentBlock::Resource(r) => {
+                let (uri, kind) = match r.resource {
+                    EmbeddedResourceResource::TextResourceContents(t) => (t.uri, ChipKind::Text),
+                    EmbeddedResourceResource::BlobResourceContents(b) => (b.uri, ChipKind::Link),
+                };
+                let name = uri_name(&uri);
+                Update::Attached(vec![Chip { name, kind }])
+            }
             ContentBlock::Image(i) => Update::Attached(vec![Chip::image(&i.mime_type)]),
             ContentBlock::ResourceLink(l) => Update::Attached(vec![Chip {
                 name: l.name,
