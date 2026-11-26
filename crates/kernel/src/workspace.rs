@@ -54,6 +54,7 @@ pub struct Workspace {
     shown: Option<Doc>,
     /// How many live sessions hold each repo, and the entities of held repos not listed.
     held: HashMap<String, usize>,
+    loaded: bool,
 }
 
 struct GlobalWorkspace(Entity<Workspace>);
@@ -79,6 +80,7 @@ pub(crate) fn init(cx: &mut App) {
         current: None,
         shown: None,
         held: HashMap::new(),
+        loaded: false,
     });
     cx.set_global(GlobalWorkspace(workspace));
     crate::invalidate::rescan(cx);
@@ -140,6 +142,11 @@ impl Workspace {
             self.to = Some(id);
             crate::invalidate::relist(cx);
         }
+    }
+
+    /// Whether the first listing of the folders has landed.
+    pub fn loaded(&self) -> bool {
+        self.loaded
     }
 
     pub fn repos(&self) -> &[RepoInfo] {

@@ -82,3 +82,32 @@ macos = { minimum-system-version = "15.0" }
 nsis = { installer-mode = "currentUser", installer-icon = "icons/icon.ico" }
 # The binary's NEEDED libraries, and the Vulkan loader, which wgpu opens with dlopen.
 deb = { depends = ["libc6", "libgcc-s1", "libfreetype6", "libxcb1", "libxkbcommon0", "libxkbcommon-x11-0", "libvulkan1"] }
+# Code and Markdown files open in Detached from Finder, Explorer and the file manager. The macOS rank is set in scripts/package.sh.
+file-associations = [
+  { name = "Markdown", description = "Markdown file", mime-type = "text/markdown", extensions = ["md", "markdown"] },
+  { name = "Text", description = "Text file", mime-type = "text/plain", extensions = ["txt"] },
+  { name = "TypeScript", description = "TypeScript file", mime-type = "text/x-typescript", extensions = ["ts", "tsx"] },
+  { name = "JavaScript", description = "JavaScript file", mime-type = "text/javascript", extensions = ["js", "jsx", "mjs", "cjs"] },
+  { name = "JSON", description = "JSON file", mime-type = "application/json", extensions = ["json", "jsonc"] },
+  { name = "YAML", description = "YAML file", mime-type = "application/yaml", extensions = ["yaml", "yml"] },
+  { name = "TOML", description = "TOML file", mime-type = "application/toml", extensions = ["toml"] },
+  { name = "Rust", description = "Rust file", mime-type = "text/rust", extensions = ["rs"] },
+  { name = "Python", description = "Python file", mime-type = "text/x-python", extensions = ["py"] },
+  { name = "Go", description = "Go file", mime-type = "text/x-go", extensions = ["go"] },
+  { name = "Java", description = "Java file", mime-type = "text/x-java", extensions = ["java"] },
+  { name = "Kotlin", description = "Kotlin file", mime-type = "text/x-kotlin", extensions = ["kt"] },
+  { name = "Swift", description = "Swift file", mime-type = "text/x-swift", extensions = ["swift"] },
+  { name = "C", description = "C file", mime-type = "text/x-csrc", extensions = ["c", "h"] },
+  { name = "Cpp", description = "C++ file", mime-type = "text/x-c++src", extensions = ["cpp", "hpp"] },
+  { name = "CSharp", description = "C# file", mime-type = "text/x-csharp", extensions = ["cs"] },
+  { name = "Ruby", description = "Ruby file", mime-type = "application/x-ruby", extensions = ["rb"] },
+  { name = "PHP", description = "PHP file", mime-type = "application/x-php", extensions = ["php"] },
+  { name = "Shell", description = "Shell file", mime-type = "application/x-shellscript", extensions = ["sh", "zsh", "bash", "fish"] },
+  { name = "CSS", description = "CSS file", mime-type = "text/css", extensions = ["css", "scss"] },
+  { name = "HTML", description = "HTML file", mime-type = "text/html", extensions = ["html"] },
+  { name = "XML", description = "XML file", mime-type = "application/xml", extensions = ["xml"] },
+  { name = "SQL", description = "SQL file", mime-type = "application/sql", extensions = ["sql"] },
+  { name = "Vue", description = "Vue and Svelte file", extensions = ["vue", "svelte"] },
+  { name = "Lua", description = "Lua file", mime-type = "text/x-lua", extensions = ["lua"] },
+  { name = "Dart", description = "Dart file", mime-type = "application/vnd.dart", extensions = ["dart"] },
+]

@@ -20,10 +20,12 @@ pub enum Ask {
     Q(String),
     /// An env profile's values, for `env run`.
     Env(String),
+    /// Files for the running app to open; answered to any local process, not only a terminal tab.
+    Open(Vec<PathBuf>),
 }
 
-/// Answers a tab's ask; the tab is its id from `Tabs::add`.
-pub type Handler = Box<dyn Fn(u64, Ask) -> Result<Value> + Send + Sync>;
+/// Answers an ask; the tab is its id from `Tabs::add`, None for an `Open` from outside a tab.
+pub type Handler = Box<dyn Fn(Option<u64>, Ask) -> Result<Value> + Send + Sync>;
 
 /// A terminal tab's variable that tells `detached-cli` where the socket is.
 pub const SOCKET_VAR: &str = "DETACHED_SOCKET";
@@ -112,12 +114,12 @@ fn answer(conn: sys::Conn, tab: Option<u64>, handle: &Handler) {
     let mut reader = BufReader::new((&conn).take(1 << 20));
     let mut line = String::new();
     let ask = reader.read_line(&mut line).map_err(Error::from);
-    let reply = match (
-        tab,
-        ask.and_then(|_| Ok(serde_json::from_str::<Ask>(&line)?)),
-    ) {
+    let ask = ask.and_then(|_| Ok(serde_json::from_str::<Ask>(&line)?));
+    let reply = match (tab, ask) {
+        (Some(_), Ok(ask)) | (None, Ok(ask @ Ask::Open(_))) => {
+            handle(tab, ask).map_err(|e| e.to_string())
+        }
         (None, _) => Err(REFUSED.to_string()),
-        (Some(tab), Ok(ask)) => handle(tab, ask).map_err(|e| e.to_string()),
         (_, Err(e)) => Err(e.to_string()),
     };
     let reply = serde_json::to_string(&reply).unwrap_or_default() + "\n";
@@ -135,6 +137,11 @@ pub fn ask(path: &Path, ask: &Ask) -> Result<Value> {
     let mut line = String::new();
     BufReader::new(&conn).read_line(&mut line)?;
     serde_json::from_str::<std::result::Result<Value, String>>(&line)?.map_err(Error::Other)
+}
+
+/// Has the app running on `data` open `paths`.
+pub fn open(data: &Path, paths: Vec<PathBuf>) -> Result<()> {
+    ask(&socket(data), &Ask::Open(paths)).map(drop)
 }
 
 /// Puts `detached-cli` from `exe_dir` on the PATH: a link in `~/.local/bin` on Unix, `exe_dir` in
@@ -502,6 +509,7 @@ mod tests {
         let tabs = Arc::new(Tabs::default());
         let handle: Handler =
             Box::new(|tab, ask| Ok(serde_json::json!({ "tab": tab, "ask": ask })));
+        let opens = vec![PathBuf::from("/a/b.rs")];
         let _server = serve(&path, tabs.clone(), handle).unwrap();
         let q = Ask::Q("{ schema }".into());
         let refused = ask(&path, &q).unwrap_err().to_string();
@@ -520,6 +528,10 @@ mod tests {
         );
         drop(shell);
         assert_eq!(ask(&path, &q).unwrap_err().to_string(), REFUSED);
+        let opened = ask(&path, &Ask::Open(opens.clone())).unwrap();
+        assert_eq!(opened["tab"], Value::Null);
+        assert_eq!(opened["ask"], serde_json::json!({ "open": ["/a/b.rs"] }));
+        assert!(open(dir.path(), opens).is_ok());
     }
 
     #[cfg(unix)]

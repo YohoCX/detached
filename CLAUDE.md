@@ -51,6 +51,11 @@ Driving the app: run `make drive` in the background; once it prints `ready <dir>
 `scope/id` picks one of several. The chat runs `fake_claude` (crates/core/src/bin): `pong` answers
 `said pong`; `wait chat.send` before the next prompt, as a busy chat drops Enter.
 
+Opening files: `detached <path>…` hands the paths to the running app over the owner socket (`Ask::Open`,
+answered to any local process) and exits; without one it starts and opens them. macOS gets Finder's files
+from GPUI's `on_open_urls`; `file-associations` in `crates/app/Cargo.toml` and `scripts/package.sh` (the
+bundle's `LSHandlerRank`) make Detached their default app.
+
 ## Code style
 
 - Simple, clean, short. If it can be shorter without losing clarity, make it shorter. Fewer lines,

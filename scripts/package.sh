@@ -28,6 +28,11 @@ Darwin)
     package --target "$target" -f app
     mkdir "$out/$arch"
     mv "$out/Detached.app" "$out/$arch/"
+    # The packager cannot set the rank: Owner makes Detached the default app for its file types.
+    plist="$out/$arch/Detached.app/Contents/Info.plist"
+    for i in $(seq 0 $(($(plutil -extract CFBundleDocumentTypes raw "$plist") - 1))); do
+      /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:$i:LSHandlerRank string Owner" "$plist"
+    done
     # Nested code is signed before the bundle that holds it.
     codesign --force --options runtime -s "$identity" "$out/$arch/Detached.app/Contents/MacOS/detached-cli"
     codesign --force --options runtime -s "$identity" "$out/$arch/Detached.app"
