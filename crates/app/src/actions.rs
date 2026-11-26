@@ -35,6 +35,7 @@ pub const ACTIONS: &[Action] = &[
     a("action.find", "Find Action", Group::Search),
     a("file.recent", "Recent Files", Group::Navigate),
     a("editor.gotoLine", "Go to Line", Group::Navigate),
+    a("file.save", "Save", Group::View),
     a("nav.back", "Back", Group::Navigate),
     a("nav.forward", "Forward", Group::Navigate),
     a("panel.project", "Project Tree", Group::View),

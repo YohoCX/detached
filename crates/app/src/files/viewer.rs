@@ -3,8 +3,8 @@
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Div, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, px,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
+    Window, div, px,
 };
 
 use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
@@ -48,6 +48,7 @@ impl Viewer {
                 Group::View,
                 none,
             ),
+            register(cx, "file.save", "Save", Group::View, none),
             register(cx, "diff.show", "Show Diff", Group::Diff, diff_shown),
         ];
         Viewer {
@@ -239,6 +240,25 @@ impl DocKind for ViewerDocs {
         if let Ok(v) = view.clone().downcast::<Viewer>() {
             v.read(cx).raise(cx);
         }
+    }
+
+    fn unsaved(&self, view: &AnyView, cx: &App) -> bool {
+        let Ok(v) = view.clone().downcast::<Viewer>() else {
+            return false;
+        };
+        matches!(&v.read(cx).shown, Some(Shown::File(f)) if f.read(cx).unsaved(cx))
+    }
+
+    fn save(&self, view: &AnyView, _: &mut Window, cx: &mut App) -> Task<bool> {
+        let file = view
+            .clone()
+            .downcast::<Viewer>()
+            .ok()
+            .and_then(|v| match &v.read(cx).shown {
+                Some(Shown::File(file)) => Some(file.clone()),
+                _ => None,
+            });
+        file.map_or_else(|| Task::ready(true), |f| f.update(cx, |f, cx| f.save(cx)))
     }
 
     fn position(&self, view: &AnyView, cx: &App) -> Option<ViewPosition> {

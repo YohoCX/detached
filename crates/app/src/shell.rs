@@ -248,6 +248,7 @@ impl Shell {
         window.focus(&focus, cx);
         dock::new_window(window, cx);
         let side_sizes = SIDES.map(|side| cx.new(|cx| side.load_size(cx)));
+        window.on_window_should_close(cx, dock::confirm_window_close);
         let mut subscriptions = vec![
             // The app's chords need focus inside the shell's key context.
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),

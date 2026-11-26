@@ -231,8 +231,9 @@ pub(super) fn show_doc(
         (archived || !kind.preview() || in_pane(*id)) && kind.same(&tab.read(cx).doc, &doc)
     });
     let preview = tabs.iter().find(|(id, tab)| {
+        let t = tab.read(cx);
         in_pane(*id)
-            && (tab.read(cx).doc == Doc::NewTab || (!keep && kind.preview() && !tab.read(cx).keep))
+            && (t.doc == Doc::NewTab || (!keep && kind.preview() && !t.keep && !t.unsaved(cx)))
     });
     let id = if let Some((id, tab)) = matching.or(preview) {
         tab.update(cx, |t, cx| {
@@ -939,12 +940,14 @@ pub(super) fn confirm_close(
     w: &mut Window,
     cx: &mut App,
 ) {
-    let busy: Vec<_> = ids
+    let tabs: Vec<_> = ids
         .iter()
-        .filter_map(|id| {
-            let tab = area.read(cx).panel(*id)?.view().downcast::<DocTab>().ok()?;
-            tab.read(cx).running(cx)
-        })
+        .filter_map(|id| area.read(cx).panel(*id)?.view().downcast::<DocTab>().ok())
+        .collect();
+    let busy: Vec<_> = tabs.iter().filter_map(|t| t.read(cx).running(cx)).collect();
+    let changed: Vec<_> = tabs
+        .into_iter()
+        .filter(|t| t.read(cx).unsaved(cx))
         .collect();
     let close = move |w: &mut Window, cx: &mut App| {
         area.update(cx, |a, cx| {
@@ -988,9 +991,10 @@ pub(super) fn confirm_close(
             }
         });
     };
-    if busy.is_empty() {
-        close(w, cx);
-    } else {
+    let stop = move |w: &mut Window, cx: &mut App| {
+        if busy.is_empty() {
+            return close(w, cx);
+        }
         let title = if pane.is_some() {
             "Close pane and stop its running work?"
         } else {
@@ -1009,7 +1013,52 @@ pub(super) fn confirm_close(
             }
         })
         .detach();
+    };
+    confirm_unsaved(changed, stop, w, cx);
+}
+
+/// Asks to save or discard the changes of `tabs`, then runs `then`; Cancel or a failed save stops.
+pub(super) fn confirm_unsaved(
+    tabs: Vec<gpui_kit::Entity<DocTab>>,
+    then: impl FnOnce(&mut Window, &mut App) + 'static,
+    w: &mut Window,
+    cx: &mut App,
+) {
+    if tabs.is_empty() {
+        return then(w, cx);
     }
+    let names: Vec<_> = tabs
+        .iter()
+        .map(|t| t.read(cx).name(cx).to_string())
+        .collect();
+    let prompt = w.prompt(
+        PromptLevel::Warning,
+        "Save changes before closing?",
+        Some(&names.join("\n")),
+        &["Save", "Discard", "Cancel"],
+        cx,
+    );
+    w.spawn(cx, async move |cx| match prompt.await {
+        Ok(0) => {
+            let save = |w: &mut Window, cx: &mut App| {
+                let saves = tabs.iter().map(|t| t.update(cx, |t, cx| t.save(w, cx)));
+                saves.collect::<Vec<_>>()
+            };
+            let saves = cx.update(save).unwrap_or_default();
+            if futures::future::join_all(saves)
+                .await
+                .into_iter()
+                .all(|ok| ok)
+            {
+                let _ = cx.update(then);
+            }
+        }
+        Ok(1) => {
+            let _ = cx.update(then);
+        }
+        _ => {}
+    })
+    .detach();
 }
 
 fn close(pane: bool, w: &mut Window, cx: &mut App) {

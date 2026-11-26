@@ -615,6 +615,83 @@ fn a_file_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
     assert_eq!(rest_of_line(cx), "line 30", "the cursor stays");
 }
 
+const README_TAB: &str = "doc.file.README.md";
+
+fn readme_changed(cx: &mut VisualTestContext) -> bool {
+    label(cx, README_TAB).is_some_and(|l| l.ends_with('•'))
+}
+
+#[gpui_kit::test]
+fn a_working_tree_file_is_edited_and_saved_and_a_ref_file_is_read_only(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    md_source(cx);
+    let app = cx.sb.repo("app");
+    open(cx, &app, Some("main"), "README.md", Some(1));
+    shown(cx, "line 60");
+    cx.input("X");
+    assert_eq!(editor_text(cx), Some(readme_text(&[])));
+    assert!(!readme_changed(cx));
+
+    open(cx, &app, None, "README.md", Some(1));
+    shown(cx, "line 60");
+    cx.input("X");
+    wait_until(cx, readme_changed);
+    cx.press("secondary-s");
+    wait_until(cx, |cx| !readme_changed(cx));
+    let saved = std::fs::read_to_string(app.join("README.md")).unwrap();
+    assert!(saved.starts_with("Xline 1\n"));
+    assert_eq!(editor_text(cx), Some(saved));
+}
+
+#[gpui_kit::test]
+fn closing_a_changed_file_tab_asks_and_a_disk_change_is_offered_to_it(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    md_source(cx);
+    let app = cx.sb.repo("app");
+    let repo = app.display().to_string();
+    open(cx, &app, None, "README.md", Some(1));
+    shown(cx, "line 60");
+    cx.input("X");
+    wait_until(cx, readme_changed);
+
+    write(
+        &app,
+        [("README.md", readme_text(&[(50, "line 50 edited")]))],
+    );
+    cx.update(|_, cx| invalidate::status(cx, &repo).detach());
+    wait_until(cx, |cx| cx.find("code.changed").is_some());
+    assert!(editor_text(cx).is_some_and(|t| t.starts_with("Xline 1\n") && !t.contains("edited")));
+    cx.click("code.reload");
+    wait_until(cx, |cx| {
+        editor_text(cx).is_some_and(|t| t.contains("line 50 edited"))
+    });
+    assert!(!readme_changed(cx));
+
+    cx.input("Y");
+    wait_until(cx, readme_changed);
+    write(&app, [("README.md", readme_text(&[(50, "line 50 again")]))]);
+    cx.update(|_, cx| invalidate::status(cx, &repo).detach());
+    wait_until(cx, |cx| cx.find("code.changed").is_some());
+    cx.click("code.keep");
+    assert!(readme_changed(cx) && editor_text(cx).is_some_and(|t| t.starts_with("Yline 1\n")));
+
+    cx.update(|w, cx| w.within(README_TAB).click("tab.close", cx));
+    settle(cx);
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+    settle(cx);
+    assert!(cx.find(README_TAB).is_some());
+    cx.update(|w, cx| w.within(README_TAB).click("tab.close", cx));
+    settle(cx);
+    cx.simulate_prompt_answer("Discard");
+    wait_until(cx, |cx| cx.find(README_TAB).is_none());
+    assert!(
+        !std::fs::read_to_string(app.join("README.md"))
+            .unwrap()
+            .contains('Y')
+    );
+}
+
 #[gpui_kit::test]
 fn show_diff_compares_a_file_with_its_ref_or_with_head(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);

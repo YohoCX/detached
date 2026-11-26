@@ -107,7 +107,8 @@ file-associations = [
   { name = "HTML", description = "HTML file", mime-type = "text/html", extensions = ["html"] },
   { name = "XML", description = "XML file", mime-type = "application/xml", extensions = ["xml"] },
   { name = "SQL", description = "SQL file", mime-type = "application/sql", extensions = ["sql"] },
-  { name = "Vue", description = "Vue and Svelte file", extensions = ["vue", "svelte"] },
+  { name = "Vue", description = "Vue file", mime-type = "text/x-vue", extensions = ["vue"] },
+  { name = "Svelte", description = "Svelte file", mime-type = "text/x-svelte", extensions = ["svelte"] },
   { name = "Lua", description = "Lua file", mime-type = "text/x-lua", extensions = ["lua"] },
   { name = "Dart", description = "Dart file", mime-type = "application/vnd.dart", extensions = ["dart"] },
 ]

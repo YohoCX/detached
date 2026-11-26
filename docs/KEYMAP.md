@@ -15,6 +15,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `action.find` | Find action | Cmd+Shift+A | M1 | V3 |
 | `file.recent` | Recent files | Cmd+E | M1 | V3 |
 | `editor.gotoLine` | Go to line | Cmd+L | M1 | V2 |
+| `file.save` | Save the open file | Cmd+S | 0.7.2 | F |
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 | F |
 | `panel.project` | Session files | Cmd+1 | M1 | F |
 | `panel.chats` | Chats app | — | 0.7.1 | H11 |
