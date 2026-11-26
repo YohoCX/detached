@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter::{self, Peekable};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::Chars;
 
@@ -33,6 +34,20 @@ use kernel::ui_state;
 use kernel::workspace::{Event, Workspace};
 
 const MODE: &str = "tree.mode";
+
+/// A file row dragged out of the tree: its path on disk.
+#[derive(Clone)]
+pub struct DragFile(pub PathBuf);
+
+impl Render for DragFile {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let name = self.0.file_name().map(|n| n.to_string_lossy().into_owned());
+        ui::glass(div(), cx)
+            .px(px(10.))
+            .py(px(4.))
+            .child(name.unwrap_or_default())
+    }
+}
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 pub(crate) enum ExplorerMode {
@@ -944,6 +959,10 @@ impl Tree {
             })
             .when(r.ignored, |d| {
                 d.text_color(t.muted).aria_description("ignored")
+            })
+            .when(!r.dir, |d| {
+                let file = DragFile(std::path::Path::new(&repo).join(&r.path));
+                d.on_drag(file, |file, _, _, cx| cx.new(|_| file.clone()))
             })
             .on_aux_click({
                 let name = name.clone();

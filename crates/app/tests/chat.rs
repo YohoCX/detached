@@ -13,8 +13,9 @@ use detached_core::chat_settings::{self, Preset};
 use gpui_kit::base::test_support::texts;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
-    AppContext, ClipboardItem, Role, ScrollDelta, SharedString, SystemNotificationResponse,
-    TestAppContext, VisualTestContext, point, px, size,
+    AppContext, ClipboardEntry, ClipboardItem, ExternalPaths, Image, ImageFormat, Role,
+    ScrollDelta, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext,
+    point, px, size,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -3539,4 +3540,81 @@ fn a_click_expands_a_chip_into_the_input_and_remove_drops_it(cx: &mut TestAppCon
     cx.click("chat.paste.0");
     assert!(cx.find("chat.paste.0").is_none());
     assert_eq!(composer(cx).value(), Some(b.as_str()));
+}
+
+fn paste_item(cx: &mut VisualTestContext, entry: ClipboardEntry) {
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem {
+            entries: vec![entry],
+        })
+    });
+    cx.press("secondary-v");
+}
+
+fn paste_files(cx: &mut VisualTestContext, paths: &[&Path]) {
+    let paths = ExternalPaths(paths.iter().map(|p| p.to_path_buf()).collect());
+    paste_item(cx, ClipboardEntry::ExternalPaths(paths));
+}
+
+// The drop target shares `attach` with the paste, and a headless window cannot drop files from the
+// OS, so files come in through the clipboard's `ExternalPaths`.
+#[gpui_kit::test]
+fn a_pasted_image_becomes_a_chip_and_goes_with_the_message(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let image = Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]);
+    paste_item(cx, ClipboardEntry::Image(image));
+    assert_eq!(label(cx, "chat.attached.0").as_deref(), Some("image.png"));
+    assert_eq!(
+        cx.find("chat.send").unwrap().disabled(),
+        None,
+        "an attachment alone can be sent"
+    );
+    cx.input("fake: parts");
+    cx.press("enter");
+    wait_for_item(cx, "image:image/png");
+    assert!(items(cx).iter().any(|i| i == "Attached: image.png"));
+    assert!(
+        cx.find("chat.attached.0").is_none(),
+        "Send empties the chips"
+    );
+}
+
+#[gpui_kit::test]
+fn a_file_goes_with_its_text_and_a_big_one_as_a_link(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let (small, big) = (dir.path().join("small.txt"), dir.path().join("big.bin"));
+    std::fs::write(&small, "hello").unwrap();
+    std::fs::write(&big, vec![0u8; 150_000]).unwrap();
+    paste_files(cx, &[&small, &big]);
+    wait_until(cx, |cx| cx.find("chat.attached.1").is_some());
+    assert_eq!(
+        label(cx, "chat.attached.0").as_deref(),
+        Some("small.txt · 5 B")
+    );
+    assert_eq!(
+        label(cx, "chat.attached.1").as_deref(),
+        Some("big.bin · 146 KB")
+    );
+    cx.input("fake: parts");
+    cx.press("enter");
+    wait_for_item(cx, "text,text,text");
+    assert!(
+        items(cx)
+            .iter()
+            .any(|i| i == "Attached: small.txt, big.bin")
+    );
+}
+
+#[gpui_kit::test]
+fn remove_drops_an_attachment(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let image = Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]);
+    paste_item(cx, ClipboardEntry::Image(image));
+    cx.click("chat.attached.0.remove");
+    assert!(cx.find("chat.attached.0").is_none());
+    assert!(
+        cx.find("chat.send").unwrap().disabled().is_some(),
+        "nothing is left to send"
+    );
 }

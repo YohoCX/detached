@@ -1,10 +1,12 @@
 //! The chat page: what is set for the session, the conversation, and the box to write in.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use detached_core::api;
 use detached_core::backend::{
-    Limit, Model, Past, Piece, Question, Setting, Tool, TurnConfig, effort_label, tool_label,
+    Limit, Model, Part, Past, Piece, Prompt, Question, Setting, Tool, TurnConfig, effort_label,
+    tool_label,
 };
 use gpui_kit::base::{Button, TestSupportExt, TestTextExt};
 use gpui_kit::component::input::{
@@ -12,10 +14,11 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EntityId,
-    FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, WeakEntity, Window, canvas, div, prelude::FluentBuilder, px, relative,
+    Anchor, AnyElement, App, AppContext, ClipboardEntry, ClipboardItem, Context, Div, Entity,
+    EntityId, ExternalPaths, FocusHandle, FontWeight, ImageFormat, InteractiveElement, IntoElement,
+    KeyDownEvent, MouseButton, ParentElement, Render, Role, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, canvas, div,
+    prelude::FluentBuilder, px, relative,
 };
 
 use detached_core::docs::Need;
@@ -24,12 +27,13 @@ use detached_core::host::Act;
 use detached_core::types::Side;
 
 use super::session::{Chat, cached_efforts};
-use crate::files::{Links, Markdown};
+use crate::files::{DragFile, Links, Markdown};
 use crate::ui::theme::chat as size;
 use crate::ui::{self, DrawnMenu, Icon, radius, text, theme};
 use crate::util::{age, folder_name, now, span, status_of};
 use detached_core::adapters::{LoginStatus, Provider, RepoTrust};
 use detached_core::chat_settings::Preset;
+use kernel::activity::Activity;
 use kernel::agents::Agents;
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
@@ -55,6 +59,78 @@ struct Suggest {
     hi: usize,
 }
 
+/// What a pasted image may be: the formats an agent takes.
+const IMAGES: [ImageFormat; 4] = [
+    ImageFormat::Png,
+    ImageFormat::Jpeg,
+    ImageFormat::Gif,
+    ImageFormat::Webp,
+];
+
+/// A file held at most this long goes in with its text.
+const TEXT_MAX: u64 = 100_000;
+
+/// A file or an image held beside the composer until Send.
+struct Attached {
+    part: Part,
+    size: usize,
+    /// A file that is not under the session's repos.
+    outside: bool,
+}
+
+impl Attached {
+    fn restored(part: Part) -> Self {
+        let size = match &part {
+            Part::Image { data, .. } => data.len(),
+            Part::File { text, .. } => text.as_ref().map_or(0, String::len),
+        };
+        Attached {
+            part,
+            size,
+            outside: false,
+        }
+    }
+
+    /// Reads the file at `path`; an image by its extension, else text up to `TEXT_MAX`, else a link.
+    fn load(path: &Path, repos: &[String]) -> Option<Self> {
+        let size = std::fs::metadata(path).ok().filter(|m| m.is_file())?.len();
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+        let mime = match ext.as_deref() {
+            Some("png") => Some("image/png"),
+            Some("jpg" | "jpeg") => Some("image/jpeg"),
+            Some("gif") => Some("image/gif"),
+            Some("webp") => Some("image/webp"),
+            _ => None,
+        };
+        let part = match mime {
+            Some(mime) => Part::Image {
+                mime: mime.into(),
+                data: std::fs::read(path).ok()?,
+            },
+            None => Part::File {
+                path: path.into(),
+                text: (size <= TEXT_MAX)
+                    .then(|| std::fs::read_to_string(path).ok())
+                    .flatten(),
+            },
+        };
+        Some(Attached {
+            part,
+            size: size as usize,
+            outside: !repos.iter().any(|r| path.starts_with(r)),
+        })
+    }
+}
+
+fn byte_size(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1..1024 => format!("{n} B"),
+        1024..1_048_576 => format!("{} KB", n / 1024),
+        _ => format!("{:.1} MB", n as f64 / 1_048_576.),
+    }
+}
+
 /// An item by its session's place in the chat and its own in the session.
 type At = (usize, usize);
 
@@ -71,6 +147,7 @@ pub struct ChatView {
     input: Entity<TextareaState>,
     /// Long pastes held as chips; they join the message on Send.
     pasted: Vec<String>,
+    attached: Vec<Attached>,
     composer_focus: FocusHandle,
     provider_focus: FocusHandle,
     /// The agent's row the keys are on while its menu is open.
@@ -103,10 +180,15 @@ pub struct ChatView {
 
 impl ChatView {
     pub fn new(session: Entity<Chat>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (p, draft) = session.update(cx, |s, _| {
+        let (p, draft, back) = session.update(cx, |s, _| {
             s.has_draft = s.draft.is_some();
-            (s.provider, s.draft.take())
+            (
+                s.provider,
+                s.draft.take(),
+                std::mem::take(&mut s.draft_parts),
+            )
         });
+        let attached = back.into_iter().map(Attached::restored).collect();
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
@@ -121,6 +203,9 @@ impl ChatView {
         let subscriptions = vec![
             cx.observe_in(&session, window, |this, session, window, cx| {
                 if let Some(text) = session.update(cx, |s, _| s.draft.take()) {
+                    let back = session.update(cx, |s, _| std::mem::take(&mut s.draft_parts));
+                    this.attached
+                        .extend(back.into_iter().map(Attached::restored));
                     this.input.update(cx, |s, cx| {
                         let input = s.value();
                         if input.is_empty() {
@@ -169,6 +254,7 @@ impl ChatView {
             session,
             input,
             pasted: Vec::new(),
+            attached,
             composer_focus,
             provider_focus: cx.focus_handle(),
             menu: None,
@@ -221,15 +307,59 @@ impl ChatView {
             .filter(|p| !p.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        if text.is_empty() {
+        let parts: Vec<_> = self.attached.iter().map(|a| a.part.clone()).collect();
+        if text.is_empty() && parts.is_empty() {
             return;
         }
-        if self.session.update(cx, |s, cx| s.send(text, cx)) {
+        if self.takes_no_images(cx) && parts.iter().any(|p| matches!(p, Part::Image { .. })) {
+            let note = "This agent takes no images: remove them to send";
+            Activity::global(cx).update(cx, |a, cx| a.say(note, false, cx));
+            return;
+        }
+        if self
+            .session
+            .update(cx, |s, cx| s.send(Prompt { text, parts }, cx))
+        {
             self.pasted.clear();
+            self.attached.clear();
             self.input.update(cx, |s, cx| s.set_value("", window, cx));
             self.composer_changed(cx);
             self.scroll.scroll_to_bottom();
         }
+    }
+
+    /// Whether the open session's agent is known to take no images; before it opens, it is not.
+    fn takes_no_images(&self, cx: &App) -> bool {
+        let session = self.session.read(cx).current();
+        session.is_some_and(|s| s.read(cx).version.is_some() && !s.read(cx).images)
+    }
+
+    /// Reads the files off the UI thread and holds them beside the composer.
+    fn attach(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let chat = self.session.read(cx);
+        let repos = match chat.current() {
+            Some(s) => s.read(cx).repos(cx),
+            None => vec![chat.repo.clone()],
+        };
+        let job = blocking::run(cx, move || {
+            let load = |p: &PathBuf| Attached::load(p, &repos);
+            paths.iter().filter_map(load).collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let found = job.await;
+            this.update(cx, |this, cx| {
+                this.attached.extend(found);
+                this.composer_changed(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn unattach(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.attached.remove(i);
+        self.focus(window, cx);
+        self.composer_changed(cx);
     }
 
     /// A paste of more than 20 lines or 2000 characters.
@@ -280,8 +410,53 @@ impl ChatView {
                 cx,
             )
         });
-        let row = div().flex().flex_wrap().gap(size::GAP).children(chips);
-        (!self.pasted.is_empty()).then_some(row)
+        let chips = chips.collect::<Vec<_>>();
+        let no_images = self.takes_no_images(cx);
+        let t = theme(cx);
+        let files = self.attached.iter().enumerate().map(|(i, a)| {
+            let remove = self.me.clone();
+            let name = a.part.chip().name;
+            let (label, tip, bad) = match &a.part {
+                Part::Image { .. } => match no_images {
+                    true => (name, "This agent takes no images".to_string(), true),
+                    false => (name, format!("Image, {}", byte_size(a.size)), false),
+                },
+                Part::File { text, .. } => {
+                    let mut tip = match text {
+                        Some(_) => "Sent with its contents".to_string(),
+                        None => "Sent as a link".to_string(),
+                    };
+                    if a.outside {
+                        tip.push_str(", outside the repo");
+                    }
+                    let label = match byte_size(a.size) {
+                        s if s.is_empty() => name,
+                        s => format!("{name} · {s}"),
+                    };
+                    (label, tip, false)
+                }
+            };
+            let chip = ui::chip(
+                SharedString::from(format!("chat.attached.{i}")),
+                label,
+                Some(Icon::File),
+                Some(tip.into()),
+                |_, _| {},
+                move |window, cx| {
+                    remove
+                        .update(cx, |this, cx| this.unattach(i, window, cx))
+                        .ok();
+                },
+                cx,
+            );
+            chip.when(bad, |c| c.border_color(t.warning))
+        });
+        let row = div()
+            .flex()
+            .flex_wrap()
+            .gap(size::GAP)
+            .children(chips.into_iter().chain(files));
+        (!self.pasted.is_empty() || !self.attached.is_empty()).then_some(row)
     }
 
     /// One chip per queued prompt: a click takes it back into the input, the × drops it.
@@ -311,7 +486,8 @@ impl ChatView {
 
     fn composer_changed(&mut self, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
-        let has_draft = !input.value().is_empty() || !self.pasted.is_empty();
+        let has_draft =
+            !input.value().is_empty() || !self.pasted.is_empty() || !self.attached.is_empty();
         self.session.update(cx, |s, _| s.has_draft = has_draft);
         self._files = None;
         if self.refresh_slash(cx) {
@@ -497,6 +673,32 @@ impl ChatView {
                     .appearance(false)
                     .text_size(theme::doc::BODY)
                     .on_paste(move |item, _, cx| {
+                        let (mut paths, mut images) = (vec![], vec![]);
+                        for entry in &item.entries {
+                            match entry {
+                                ClipboardEntry::ExternalPaths(p) => {
+                                    paths.extend(p.paths().to_vec())
+                                }
+                                ClipboardEntry::Image(i) if IMAGES.contains(&i.format) => images
+                                    .push(Part::Image {
+                                        mime: i.format.mime_type().into(),
+                                        data: i.bytes.clone(),
+                                    }),
+                                _ => {}
+                            }
+                        }
+                        if !paths.is_empty() || !images.is_empty() {
+                            return me
+                                .update(cx, |this, cx| {
+                                    this.attached
+                                        .extend(images.into_iter().map(Attached::restored));
+                                    if !paths.is_empty() {
+                                        this.attach(paths, cx);
+                                    }
+                                    this.composer_changed(cx);
+                                })
+                                .is_ok();
+                        }
                         let Some(text) = item.text().filter(|t| Self::is_long(t)) else {
                             return false;
                         };
@@ -686,7 +888,9 @@ impl ChatView {
             },
         );
         let busy = chat.busy(cx);
-        let empty = self.input.read(cx).value().trim().is_empty() && self.pasted.is_empty();
+        let empty = self.input.read(cx).value().trim().is_empty()
+            && self.pasted.is_empty()
+            && self.attached.is_empty();
         // A pill puts its label first.
         let stop = busy.then(|| {
             ui::button("chat.stop", "Stop", cx)
@@ -2487,6 +2691,18 @@ impl Render for ChatView {
                                 true => t.selected_ring,
                                 false => t.line,
                             })
+                            .drag_over::<ExternalPaths>(move |d, _, _, _| {
+                                d.border_color(t.selected_ring).bg(t.hover)
+                            })
+                            .on_drop(cx.listener(|this, p: &ExternalPaths, _, cx| {
+                                this.attach(p.paths().to_vec(), cx)
+                            }))
+                            .drag_over::<DragFile>(move |d, _, _, _| {
+                                d.border_color(t.selected_ring).bg(t.hover)
+                            })
+                            .on_drop(cx.listener(|this, f: &DragFile, _, cx| {
+                                this.attach(vec![f.0.clone()], cx)
+                            }))
                             .flex()
                             .flex_col()
                             .p(size::PAD)
