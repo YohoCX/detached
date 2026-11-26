@@ -4,7 +4,7 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 
 use detached_core::adapters::{CLAUDE, Provider};
-use detached_core::backend::{Kind, Model, Setting, SlashCommand, Spec, StopReason};
+use detached_core::backend::{Kind, Model, Part, Prompt, Setting, SlashCommand, Spec, StopReason};
 use detached_core::chat_settings::{Choices, Preset};
 use detached_core::trust::{self, Project};
 use detached_core::types::RepoInfo;
@@ -46,6 +46,8 @@ pub struct Chat {
     /// The first thing the user said here.
     pub topic: Option<String>,
     pub(super) draft: Option<String>,
+    /// The attachments of `draft`.
+    pub(super) draft_parts: Vec<Part>,
     pub(super) has_draft: bool,
     /// What the next session opens with.
     mode: Option<String>,
@@ -90,6 +92,7 @@ impl Chat {
             sessions: vec![],
             topic: None,
             draft: None,
+            draft_parts: vec![],
             has_draft: false,
             mode: choices.mode,
             model: choices.model,
@@ -140,7 +143,8 @@ impl Chat {
     }
 
     /// Sends `text` to the session, or to a new one that resumes the conversation.
-    pub fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+    pub fn send(&mut self, prompt: impl Into<Prompt>, cx: &mut Context<Self>) -> bool {
+        let prompt = prompt.into();
         if self.is_new(cx) {
             if !super::can_start(cx) {
                 return false;
@@ -162,10 +166,24 @@ impl Chat {
         let s = self
             .live(cx)
             .unwrap_or_else(|| self.open(self.conversation(cx).map(String::from), cx));
-        self.topic.get_or_insert_with(|| text.clone());
-        s.update(cx, |s, cx| s.prompt(text, cx));
+        self.topic
+            .get_or_insert_with(|| match prompt.text.is_empty() {
+                true => prompt
+                    .chips()
+                    .first()
+                    .map_or_else(String::new, |c| c.name.clone()),
+                false => prompt.text.clone(),
+            });
+        s.update(cx, |s, cx| s.prompt_parts(prompt, cx));
         cx.notify();
         true
+    }
+
+    /// Puts a prompt back in the composer: its text, and its attachments as chips.
+    pub(super) fn restore(&mut self, text: String, parts: Vec<Part>) {
+        self.draft = Some(text);
+        self.draft_parts = parts;
+        self.has_draft = true;
     }
 
     fn changed(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
@@ -181,7 +199,7 @@ impl Chat {
                 drop(self._watch.remove(0));
                 self.sessions.remove(0);
             }
-            let (commands, returned, unsent, ended, kept) = s.update(cx, |s, _| {
+            let (commands, returned, unsent, mut back, ended, kept) = s.update(cx, |s, _| {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
                 let kept = std::mem::take(&mut s.refused)
                     .then(|| ["mode", "model", "effort"].map(|k| s.option(k).map(String::from)));
@@ -189,17 +207,15 @@ impl Chat {
                     .commands
                     .as_ref()
                     .filter(|c| Some(*c) != self.remembered.as_ref());
-                (
-                    commands.cloned(),
-                    s.returned.take(),
-                    s.unsent.take(),
-                    ended,
-                    kept,
-                )
+                let (returned, unsent) = (s.returned.take(), s.unsent.take());
+                let back = match returned.is_some() || unsent.is_some() {
+                    true => std::mem::take(&mut s.kept),
+                    false => vec![],
+                };
+                (commands.cloned(), returned, unsent, back, ended, kept)
             });
             if let Some(text) = returned {
-                self.draft = Some(text);
-                self.has_draft = true;
+                self.restore(text, std::mem::take(&mut back));
                 if self.first_user(cx).is_none() {
                     self.topic = None;
                 }
@@ -222,7 +238,7 @@ impl Chat {
                 self.remembered = Some(commands);
             }
             if let Some(text) = unsent {
-                self.send(text, cx);
+                self.send(Prompt { text, parts: back }, cx);
             }
             let busy = s.read(cx).busy();
             if (self.was.1 && !busy) || ended {
