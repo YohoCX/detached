@@ -1783,3 +1783,35 @@ fn the_start_form_has_four_steps_whose_modes_follow_the_subject_and_whose_start_
     assert!(start.top() >= steps[3].bottom(), "Start sits below Access");
     assert!(app.find("council.form.check").is_none());
 }
+
+#[gpui_kit::test]
+fn the_who_step_follows_the_mode_and_a_budget_is_checked_without_a_recheck(
+    cx: &mut TestAppContext,
+) {
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        repo(sb, "reviewed");
+    });
+    open_tab(&mut app, "tab.council");
+    app.click("council.new");
+    wait_until(&mut app, |cx| cx.find("council.form.trust").is_some());
+    let who = |app: &mut TestApp| label(app, "council.form.who").unwrap();
+    assert_eq!(who(&mut app), "Claude finds and verifies");
+    app.click("council.form.change");
+    app.click("council.form.budget");
+    app.input("lots");
+    wait_until(&mut app, |cx| {
+        cx.find("council.form.budget.error").is_some()
+    });
+    assert!(
+        app.find("council.form.trust").is_some(),
+        "a budget is no reason to check again"
+    );
+
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        w.within("council.form.subject").click(4usize, cx)
+    });
+    settle(&app);
+    assert_eq!(who(&mut app), "Claude takes part");
+}

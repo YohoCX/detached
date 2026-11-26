@@ -85,7 +85,8 @@ pub(super) struct Form {
     preview: Option<Result<Preview, String>>,
     rounds: Interest<Rounds>,
     busy: bool,
-    checking: Option<Task<()>>,
+    /// Bumped by each check and edit; a preview lands only if it is still the latest.
+    generation: u32,
     typing: Option<Task<()>>,
     pub done: bool,
     _settings: Subscription,
@@ -114,7 +115,7 @@ impl Form {
             cx,
         );
         let budget = input("", "Budget in tokens (optional)", window, cx);
-        let _inputs = [&branch, &base, &item, &budget]
+        let _inputs = [&branch, &base, &item]
             .into_iter()
             .map(|i| {
                 cx.subscribe(i, |f: &mut Form, _, e: &InputEvent, cx| {
@@ -138,7 +139,7 @@ impl Form {
             change: false,
             preview: None,
             busy: false,
-            checking: None,
+            generation: 0,
             typing: None,
             done: false,
             _settings: cx.observe(&Settings::global(cx), |this: &mut Form, _, cx| {
@@ -175,8 +176,9 @@ impl Form {
             remote: false,
             mode: self.mode.into(),
             untrusted: self.untrusted,
-            budget: text(&self.budget).parse().ok(),
-            codex: providers.shows(&CODEX) && (self.codex || !providers.shows(&CLAUDE)),
+            budget: budget(&text(&self.budget)).ok().flatten(),
+            codex: providers.shows(&CODEX)
+                && (self.codex && self.verifies() || !providers.shows(&CLAUDE)),
             roles: vec![],
             over,
             head: None,
@@ -185,7 +187,8 @@ impl Form {
 
     /// An input changed: the preview is stale until the typing pauses.
     fn edited(&mut self, cx: &mut Context<Self>) {
-        (self.preview, self.checking) = (None, None);
+        self.preview = None;
+        self.generation += 1;
         self.typing = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
             this.update(cx, |f, cx| f.check(cx)).ok();
@@ -195,20 +198,24 @@ impl Form {
 
     fn check(&mut self, cx: &mut Context<Self>) {
         self.typing = None;
+        self.generation += 1;
+        let generation = self.generation;
         let t = match self.start(cx) {
             Ok(s) => live::preview(s, cx),
             Err(e) => {
-                (self.preview, self.checking) = (Some(Err(e)), None);
+                self.preview = Some(Err(e));
                 return cx.notify();
             }
         };
         self.preview = None;
-        // Replaces the check before, so a slower earlier preview never lands after this one.
-        self.checking = Some(cx.spawn(async move |this, cx| {
+        // A dropped preview would leave its "Check !n" operation unfinished, so a stale one runs out.
+        self._tasks.push(cx.spawn(async move |this, cx| {
             let p = t.await.map_err(|e| e.to_string());
             this.update(cx, |f, cx| {
-                f.preview = Some(p);
-                cx.notify();
+                if f.generation == generation {
+                    f.preview = Some(p);
+                    cx.notify();
+                }
             })
             .ok();
         }));
@@ -229,6 +236,15 @@ impl Form {
             })
             .ok();
         }));
+    }
+
+    fn budget_of(&self, cx: &App) -> Result<Option<u64>, String> {
+        budget(&self.budget.read(cx).value())
+    }
+
+    /// Whether the mode has a verify stage.
+    fn verifies(&self) -> bool {
+        matches!(self.mode, "review" | "gate" | "plan-review")
     }
 
     fn estimate(&self, cx: &App) -> Option<u64> {
@@ -335,10 +351,12 @@ impl Form {
     fn who(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let providers = crate::chat::provider_config(cx);
         let (claude, codex) = (providers.shows(&CLAUDE), providers.shows(&CODEX));
-        let who = match (claude, codex) {
-            (true, true) if self.codex => "Claude finds, Codex verifies",
-            (false, true) => "Codex verifies",
-            _ => "Claude finds and verifies",
+        let who = match (claude, codex, self.verifies()) {
+            (true, true, true) if self.codex => "Claude finds, Codex verifies",
+            (false, true, true) => "Codex finds and verifies",
+            (_, _, true) => "Claude finds and verifies",
+            (false, true, false) => "Codex takes part",
+            _ => "Claude takes part",
         };
         let me = cx.entity().downgrade();
         ui::step("council.form.step.3", 3, "Who", cx)
@@ -347,7 +365,13 @@ impl Form {
                     .flex()
                     .items_center()
                     .gap(GAP)
-                    .child(div().child(who))
+                    .child(
+                        div()
+                            .id("council.form.who")
+                            .test_support()
+                            .aria_label(who)
+                            .child(who),
+                    )
                     .child(
                         ui::button("council.form.change", "change", cx)
                             .test_support()
@@ -357,7 +381,7 @@ impl Form {
                             })),
                     ),
             )
-            .when(self.change && claude && codex, |s| {
+            .when(self.change && claude && codex && self.verifies(), |s| {
                 s.child(ui::segmented(
                     "council.form.verifier",
                     &[(false, "Claude verifies"), (true, "Codex verifies")],
@@ -372,7 +396,24 @@ impl Form {
                     cx,
                 ))
             })
-            .when(self.change, |s| s.child(ui::input(&self.budget, cx)))
+            .when(self.change, |s| {
+                s.child(
+                    div()
+                        .id("council.form.budget")
+                        .test_support()
+                        .child(ui::input(&self.budget, cx)),
+                )
+                .when_some(self.budget_of(cx).err(), |s, e| {
+                    s.child(
+                        div()
+                            .id("council.form.budget.error")
+                            .test_support()
+                            .aria_label(e.clone())
+                            .text_color(theme(cx).error)
+                            .child(e),
+                    )
+                })
+            })
     }
 
     /// Step 4: the trust of the subject, and what to do about it.
@@ -507,6 +548,7 @@ impl Form {
                 format!("About {} tokens, from earlier runs", tokens(e))
             });
         let ready = !self.busy
+            && self.budget_of(cx).is_ok()
             && matches!(&self.preview, Some(Ok(p)) if !p.trust.trusted || p.accepted || p.items.is_empty());
         div()
             .flex()
@@ -549,14 +591,44 @@ impl Render for Form {
             .test_support()
             .flex()
             .flex_col()
+            .flex_shrink()
+            .min_h_0()
             .gap(GAP)
             .p(GAP)
-            .child(self.subject(cx).into_any_element())
-            .child(self.modes(cx).into_any_element())
-            .child(self.who(cx).into_any_element())
-            .child(self.access(cx).into_any_element())
+            .child(
+                div()
+                    .id("council.form.steps")
+                    .flex()
+                    .flex_col()
+                    .gap(GAP)
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(self.subject(cx).into_any_element())
+                    .child(self.modes(cx).into_any_element())
+                    .child(self.who(cx).into_any_element())
+                    .child(self.access(cx).into_any_element()),
+            )
             .child(self.bar(cx).into_any_element())
     }
+}
+
+/// A token budget: digits, or a number with a `k` or `m` suffix; empty is no budget.
+fn budget(s: &str) -> Result<Option<u64>, String> {
+    let s = s.trim().to_lowercase();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let (n, unit) = [("k", 1e3), ("m", 1e6)]
+        .iter()
+        .find_map(|(c, u)| s.strip_suffix(c).map(|n| (n, *u)))
+        .unwrap_or((&s, 1.0));
+    n.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .map(|n| Some((n * unit) as u64))
+        .ok_or("Budget: a number of tokens, like 500000, 50k or 1.5m".into())
 }
 
 pub fn tokens(n: u64) -> String {
