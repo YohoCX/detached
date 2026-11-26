@@ -2,6 +2,7 @@
 //! the window.
 
 pub mod appearance;
+pub mod chip;
 pub mod disabled;
 pub mod graph;
 pub mod grip;
@@ -26,6 +27,7 @@ use gpui_kit::{
     ease_out_quint, prelude::FluentBuilder, px, relative, transparent_black,
 };
 
+pub use chip::chip;
 pub use disabled::disabled;
 pub use grip::{Edge, pane};
 pub use icon::{Icon, spinner};
