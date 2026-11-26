@@ -7,8 +7,8 @@ use std::sync::Arc;
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
-    div, prelude::FluentBuilder,
+    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Task,
+    Window, div, prelude::FluentBuilder,
 };
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,14 @@ pub trait DocKind {
     /// Shows `new` in `view`, which shows `old`; false when `new` needs a view of its own.
     fn replace(&self, _: &AnyView, old: &Doc, new: &Doc, _: &mut Window, _: &mut App) -> bool {
         old == new
+    }
+    /// Whether the view holds changes not written yet.
+    fn unsaved(&self, _: &AnyView, _: &App) -> bool {
+        false
+    }
+    /// Writes the view's changes; false when that failed.
+    fn save(&self, _: &AnyView, _: &mut Window, _: &mut App) -> Task<bool> {
+        Task::ready(true)
     }
     /// Takes `doc` from the app it was dragged out of, as it is dropped on the dock.
     fn adopt(&self, _: &Doc, _: &mut App) {}
@@ -186,8 +194,27 @@ impl DocTab {
         self.kind.id(&self.doc)
     }
 
-    pub fn title(&self, cx: &App) -> SharedString {
+    pub fn name(&self, cx: &App) -> SharedString {
         self.kind.title(&self.doc, self.view.as_ref(), cx)
+    }
+
+    /// The name, with a dot while the tab holds unsaved changes.
+    pub fn title(&self, cx: &App) -> SharedString {
+        match self.unsaved(cx) {
+            true => format!("{} •", self.name(cx)).into(),
+            false => self.name(cx),
+        }
+    }
+
+    pub fn unsaved(&self, cx: &App) -> bool {
+        !self.archived && self.view.as_ref().is_some_and(|v| self.kind.unsaved(v, cx))
+    }
+
+    pub fn save(&self, window: &mut Window, cx: &mut App) -> Task<bool> {
+        match &self.view {
+            Some(v) => self.kind.save(v, window, cx),
+            None => Task::ready(true),
+        }
     }
 
     pub fn badge(&self, cx: &App) -> Option<AnyElement> {

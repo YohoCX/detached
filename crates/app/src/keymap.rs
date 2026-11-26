@@ -36,6 +36,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("action.find", "Cmd+Shift+A"),
     ("file.recent", "Cmd+E"),
     ("editor.gotoLine", "Cmd+L"),
+    ("file.save", "Cmd+S"),
     ("nav.back", "Cmd+["),
     ("nav.forward", "Cmd+]"),
     ("panel.project", "Cmd+1"),

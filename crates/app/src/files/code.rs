@@ -1,33 +1,95 @@
-//! The viewer's read-only editor, and the languages it colors.
+//! The viewer's editor, and the languages it colors.
 
+use std::path::PathBuf;
 use std::sync::Once;
 
+use detached_core::api;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::highlighter::{LanguageConfig, LanguageRegistry};
-use gpui_kit::component::input::{Editor, EditorState, Position, RopeExt};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, Position, RopeExt};
 use gpui_kit::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    Styled, Window, div, point, px,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, point, px,
 };
 
 use crate::dock::ViewPosition;
 use crate::keymap;
+use crate::ui::{self, theme};
 use crate::util::base_name;
+use kernel::activity::Activity;
+use kernel::blocking;
 
 pub(super) struct Code {
     editor: Entity<EditorState>,
     /// A line to center once the editor is laid out.
     center: Option<u32>,
     restored: Option<ViewPosition>,
+    editable: bool,
+    dirty: bool,
+    /// The text on disk as last read or written.
+    disk: String,
+    /// A newer text on disk that the edited buffer has not taken.
+    external: Option<String>,
+    _change: Subscription,
 }
 
 impl Code {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editor = cx.new(|cx| EditorState::new(window, cx));
+        let change = cx.subscribe(&editor, |this, _, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::Change) && this.editable {
+                this.dirty = true;
+                cx.notify();
+            }
+        });
         Code {
             editor,
             center: None,
             restored: None,
+            editable: false,
+            dirty: false,
+            disk: String::new(),
+            external: None,
+            _change: change,
         }
+    }
+
+    pub(super) fn set_editable(&mut self, editable: bool, cx: &mut Context<Self>) {
+        self.editable = editable;
+        cx.notify();
+    }
+
+    pub(super) fn unsaved(&self) -> bool {
+        self.dirty
+    }
+
+    /// Writes the buffer to `file`; false when it could not, which it says.
+    pub(super) fn save(&mut self, file: PathBuf, cx: &mut Context<Self>) -> Task<bool> {
+        if !self.dirty {
+            return Task::ready(true);
+        }
+        let text = self.text(cx);
+        let body = text.clone();
+        let write = blocking::run(cx, move || {
+            api::write_text(&file, &body).map_err(|e| e.to_string())
+        });
+        cx.spawn(async move |this, cx| match write.await {
+            Ok(written) => this
+                .update(cx, |c, cx| {
+                    c.dirty = c.text(cx) != text;
+                    c.disk = written;
+                    c.external = None;
+                    cx.notify();
+                })
+                .is_ok(),
+            Err(e) => {
+                cx.update(|cx| {
+                    let said = format!("Could not save: {e}");
+                    Activity::global(cx).update(cx, |a, cx| a.say(said, true, cx));
+                });
+                false
+            }
+        })
     }
 
     /// Shows `text` colored for `path`; the same text changes nothing. `keep` holds the cursor
@@ -40,6 +102,17 @@ impl Code {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.dirty {
+            let same = *self.editor.read(cx).text() == text;
+            if same {
+                (self.dirty, self.disk) = (false, text.to_string());
+            }
+            self.external = (!same && text != self.disk).then(|| text.to_string());
+            cx.notify();
+            return;
+        }
+        self.disk = text.to_string();
+        self.external = None;
         let lang = language_for(path);
         self.editor.update(cx, |e, cx| {
             if e.language_name() != lang {
@@ -141,15 +214,54 @@ impl Render for Code {
                 None => window.request_animation_frame(),
             }
         }
+        let bar = self.external.is_some().then(|| {
+            let t = theme(cx);
+            let text = "Changed on disk";
+            let reload = ui::button("code.reload", "Reload", cx).on_click(cx.listener(
+                |this, _, window, cx| {
+                    let text = this.external.take().unwrap_or_default();
+                    this.editor
+                        .update(cx, |e, cx| e.set_value(text.clone(), window, cx));
+                    (this.dirty, this.disk) = (false, text);
+                    cx.notify();
+                },
+            ));
+            let keep =
+                ui::button("code.keep", "Keep mine", cx).on_click(cx.listener(|this, _, _, cx| {
+                    this.disk = this.external.take().unwrap_or_default();
+                    cx.notify();
+                }));
+            div()
+                .id("code.changed")
+                .test_support()
+                .aria_label(text)
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(8.))
+                .px(px(16.))
+                .py(px(6.))
+                .bg(t.conflict.opacity(0.14))
+                .border_b_1()
+                .border_color(t.line)
+                .child(div().flex_1().child(text))
+                .child(reload)
+                .child(keep)
+        });
         div()
             .id("viewer.code")
             .key_context(keymap::VIEWER)
+            .flex()
+            .flex_col()
             .size_full()
+            .children(bar)
             .child(
-                Editor::new(&self.editor)
-                    .readonly(true)
-                    .bordered(false)
-                    .h_full(),
+                div().flex_1().min_h_0().child(
+                    Editor::new(&self.editor)
+                        .readonly(!self.editable)
+                        .bordered(false)
+                        .h_full(),
+                ),
             )
     }
 }

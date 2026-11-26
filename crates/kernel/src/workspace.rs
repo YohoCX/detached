@@ -42,7 +42,7 @@ pub struct Workspace {
     /// The workspace a `switch` asked for, until its repos are listed.
     to: Option<String>,
     /// Document to reveal once a user-requested workspace switch finishes.
-    reveal: Option<(String, String, Doc)>,
+    reveal: Option<(String, String, Doc, bool)>,
     repos: Vec<RepoInfo>,
     entities: HashMap<String, Held>,
     aliases: HashMap<String, String>,
@@ -332,13 +332,25 @@ impl Workspace {
         doc: Doc,
         cx: &mut Context<Self>,
     ) {
+        self.show_in_session_tab(workspace, session, doc, false, cx);
+    }
+
+    /// As `show_in_session`; `keep` opens a tab of its own, not the preview tab.
+    pub fn show_in_session_tab(
+        &mut self,
+        workspace: String,
+        session: String,
+        doc: Doc,
+        keep: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.switch(workspace.clone(), cx);
         if self.id() != Some(&workspace) {
-            self.reveal = Some((workspace, session, doc));
+            self.reveal = Some((workspace, session, doc, keep));
             return;
         }
         if self.session == session {
-            self.show(doc, cx);
+            self.show_tab(doc, keep, cx);
             return;
         }
         self.switch_session(&session, cx);
@@ -346,7 +358,7 @@ impl Workspace {
         cx.defer(move |cx| {
             Self::global(cx).update(cx, |w, cx| {
                 if w.wanted().as_deref() == Some(&workspace) && w.session == session {
-                    w.show(doc, cx);
+                    w.show_tab(doc, keep, cx);
                 }
             })
         });
@@ -485,13 +497,13 @@ impl Workspace {
         } else if changed {
             cx.emit(Event::SessionChanged);
         }
-        if let Some((workspace, session, doc)) = self.reveal.take()
+        if let Some((workspace, session, doc, keep)) = self.reveal.take()
             && self.id() == Some(&workspace)
         {
             cx.defer(move |cx| {
                 Self::global(cx).update(cx, |w, cx| {
                     if w.wanted().as_deref() == Some(&workspace) {
-                        w.show_in_session(workspace, session, doc, cx);
+                        w.show_in_session_tab(workspace, session, doc, keep, cx);
                     }
                 })
             });
@@ -500,6 +512,7 @@ impl Workspace {
 
     pub(crate) fn set_repos(&mut self, list: Vec<RepoInfo>, cx: &mut Context<Self>) {
         self.repos = list;
+        self.loaded = true;
         self.apply_repos(cx);
     }
 
@@ -746,6 +759,7 @@ mod tests {
         let (_dir, a, _) = boot(cx);
         cx.read(|cx| {
             let w = Workspace::get(cx);
+            assert!(w.loaded());
             assert_eq!(w.repos[0].name, "a");
             assert_eq!(w.current(), Some(a.as_str()));
             let branch = Repo::get(cx, &a).unwrap().status().unwrap().branch.clone();

@@ -11,7 +11,7 @@ use detached_core::types::RepoInfo;
 use detached_core::watch::{Batch, Watcher};
 use futures::StreamExt;
 use futures::channel::{mpsc, oneshot};
-use gpui::{App, Global, Subscription, Task};
+use gpui::{App, Context, Global, Subscription, Task};
 
 use crate::activity::{Activity, OpEnded};
 use crate::blocking;
@@ -238,12 +238,28 @@ pub fn rescanning(cx: &App) -> bool {
 /// watcher is set again, which brings back a watch the OS dropped and reads the excludes again.
 pub fn activated(cx: &mut App) {
     cx.default_global::<Away>().1 = false;
+    cx.default_global::<Activations>();
+    cx.update_global(|a: &mut Activations, _| a.0 += 1);
     pass(cx, false);
     resource::input(cx, Input::Activated);
     if cx.has_global::<Watch>() {
         cx.global_mut::<Watch>().applied = None;
         follow(cx);
     }
+}
+
+#[derive(Default)]
+struct Activations(u64);
+
+impl Global for Activations {}
+
+/// Calls `f` each time the window comes forward, for what no watcher sees.
+pub fn on_activated<V: 'static>(
+    cx: &mut Context<V>,
+    f: impl Fn(&mut V, &mut Context<V>) + 'static,
+) -> Subscription {
+    cx.default_global::<Activations>();
+    cx.observe_global::<Activations>(f)
 }
 
 /// The window lost focus: what changes until it comes back may escape the watcher, so activation

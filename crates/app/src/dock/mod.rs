@@ -575,6 +575,38 @@ pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
     }
 }
 
+fn unsaved_tabs(cx: &App) -> Vec<Entity<DocTab>> {
+    let tabs = areas(cx).into_iter().flat_map(|a| docs(a.read(cx)));
+    tabs.map(|(_, t)| t)
+        .filter(|t| t.read(cx).unsaved(cx))
+        .collect()
+}
+
+/// The window is closing: asks about unsaved tabs; false when it asked, and closes after the answer.
+pub fn confirm_window_close(window: &mut Window, cx: &mut App) -> bool {
+    let tabs = unsaved_tabs(cx);
+    let ask = !tabs.is_empty();
+    if ask {
+        panes::confirm_unsaved(tabs, |w, _| w.remove_window(), window, cx);
+    }
+    !ask
+}
+
+/// Quits once unsaved tabs are saved or discarded.
+pub fn quit(cx: &mut App) {
+    let tabs = unsaved_tabs(cx);
+    let window = cx.active_window().or_else(|| cx.windows().first().copied());
+    match window.filter(|_| !tabs.is_empty()) {
+        Some(window) => {
+            let ask = |w: &mut Window, cx: &mut App| {
+                panes::confirm_unsaved(tabs, |_, cx| cx.quit(), w, cx)
+            };
+            window.update(cx, |_, w, cx| ask(w, cx)).ok();
+        }
+        None => cx.quit(),
+    }
+}
+
 fn remove_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
     for area in areas(cx) {
         if docs(area.read(cx)).iter().any(|(_, t)| *t == tab) {

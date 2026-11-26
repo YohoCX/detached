@@ -3,14 +3,18 @@
 use std::path::PathBuf;
 
 use detached_core::api;
+use detached_core::types::Content;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, div,
+    AnyView, AnyWindowHandle, App, AppContext, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    Window, div,
 };
 
 use super::code::Code;
+use super::diff::describe;
 use super::viewer;
+use crate::actions::{self, Group, Registration};
 use crate::dock::DocKind;
 use crate::ui;
 use crate::util::folder_name;
@@ -30,51 +34,85 @@ pub(super) struct Loose {
     /// The git repo holding the file, which the tab offers to add to the workspace.
     repo: Option<PathBuf>,
     _load: Task<()>,
+    _actions: Vec<Registration>,
+    _activated: Subscription,
 }
 
 impl Loose {
     fn new(path: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let core = kernel::core(cx).clone();
-        let file = PathBuf::from(&path);
-        let read = blocking::run(cx, move || {
-            let text = std::fs::read(&file)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| {
-                    String::from_utf8(bytes).map_err(|_| "This file is not text.".to_string())
-                });
-            (text, api::repo_root(&core, &file))
-        });
-        let load = cx.spawn_in(window, async move |this, cx| {
-            let (text, repo) = read.await;
-            this.update_in(cx, |v, window, cx| v.loaded(text, repo, window, cx))
-                .ok();
-        });
-        Loose {
+        let handle = window.window_handle();
+        let this = cx.weak_entity();
+        let save = move |_: &mut Window, cx: &mut App| {
+            this.update(cx, |v, cx| v.save(cx).detach()).ok();
+        };
+        let mut view = Loose {
             code: cx.new(|cx| Code::new(window, cx)),
             path,
             body: Body::Loading,
             repo: None,
-            _load: load,
-        }
+            _load: Task::ready(()),
+            _actions: vec![actions::register(
+                cx,
+                "file.save",
+                "Save",
+                Group::View,
+                save,
+            )],
+            _activated: kernel::invalidate::on_activated(cx, move |v, cx| v.load(handle, cx)),
+        };
+        view.load(handle, cx);
+        view
+    }
+
+    /// Reads the file; a window coming forward reads it again, for edits made elsewhere.
+    fn load(&mut self, window: AnyWindowHandle, cx: &mut Context<Self>) {
+        let core = kernel::core(cx).clone();
+        let file = PathBuf::from(&self.path);
+        let read = blocking::run(cx, move || {
+            let content = api::read_loose(&file).map_err(|e| e.to_string());
+            (content, api::repo_root(&core, &file))
+        });
+        self._load = cx.spawn(async move |this, cx| {
+            let (content, repo) = read.await;
+            let show = |window: &mut Window, cx: &mut App| {
+                this.update(cx, |v, cx| v.loaded(content, repo, window, cx))
+                    .ok();
+            };
+            window.update(cx, |_, window, cx| show(window, cx)).ok();
+        });
     }
 
     fn loaded(
         &mut self,
-        text: Result<String, String>,
+        content: Result<Content, String>,
         repo: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.repo = repo;
-        self.body = match text {
-            Ok(text) => {
-                self.code
-                    .update(cx, |c, cx| c.set(&self.path, &text, false, window, cx));
+        let first = matches!(self.body, Body::Loading);
+        let focus = first && crate::dock::is_doc_view_shown(cx.entity_id(), cx);
+        self.body = match content {
+            Ok(Content::Text { text }) => {
+                self.code.update(cx, |c, cx| {
+                    c.set_editable(true, cx);
+                    c.set(&self.path, &text, true, window, cx);
+                    if focus {
+                        c.focus(window, cx);
+                    }
+                });
                 Body::Text
             }
+            _ if self.code.read(cx).unsaved() => return,
+            Ok(c) => Body::Placeholder(describe(&c).into()),
             Err(e) => Body::Placeholder(e.into()),
         };
         cx.notify();
+    }
+
+    fn save(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+        let file = PathBuf::from(&self.path);
+        self.code.update(cx, |c, cx| c.save(file, cx))
     }
 }
 
@@ -134,6 +172,24 @@ impl DocKind for LooseDocs {
         };
         let path = path.clone();
         cx.new(|cx| Loose::new(path, window, cx)).into()
+    }
+
+    fn activated(&self, view: &AnyView, _: &mut Window, cx: &mut App) {
+        if let Ok(v) = view.clone().downcast::<Loose>() {
+            actions::raise(&v.read(cx)._actions, cx);
+        }
+    }
+
+    fn unsaved(&self, view: &AnyView, cx: &App) -> bool {
+        let unsaved = |v: Entity<Loose>| v.read(cx).code.read(cx).unsaved();
+        view.clone().downcast::<Loose>().is_ok_and(unsaved)
+    }
+
+    fn save(&self, view: &AnyView, _: &mut Window, cx: &mut App) -> Task<bool> {
+        match view.clone().downcast::<Loose>() {
+            Ok(v) => v.update(cx, |v, cx| v.save(cx)),
+            Err(_) => Task::ready(true),
+        }
     }
 
     fn id(&self, doc: &Doc) -> SharedString {

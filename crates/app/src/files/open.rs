@@ -11,12 +11,17 @@ use kernel::blocking;
 use kernel::doc::{Doc, Location};
 use kernel::workspace::Workspace;
 
-/// The paths among a command line's arguments, absolute.
+/// The files among a command line's arguments, absolute; anything else is named on stderr.
 pub fn cli_paths(args: &[String]) -> Vec<PathBuf> {
     let paths = args.iter().skip(1).filter(|a| !a.starts_with('-'));
-    paths
-        .map(|a| std::path::absolute(a).unwrap_or(a.into()))
-        .collect()
+    let file = |a: &String| {
+        let path = std::path::absolute(a).unwrap_or(a.into());
+        path.is_file().then_some(path).or_else(|| {
+            eprintln!("not a file: {a}");
+            None
+        })
+    };
+    paths.filter_map(file).collect()
 }
 
 /// The files among the `file://` URLs the OS hands over.
@@ -40,8 +45,9 @@ enum Target {
     Loose(String),
 }
 
-/// Opens each file in the session whose repo holds it, else as a plain tab. Files that
-/// arrive before the first listing wait for it.
+/// Opens each file in a tab of its own, in the session whose repo holds it, else as a plain
+/// tab. Files that arrive before the first listing wait for it. Each shows in its own update,
+/// as the shell opens the tab of the last one shown.
 pub fn open_paths(cx: &mut App, paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
@@ -67,12 +73,10 @@ pub fn open_paths(cx: &mut App, paths: Vec<PathBuf>) {
         let places = cx.update(|cx| places(cx));
         let job = move || paths.iter().filter_map(|p| resolve(p, &places)).collect();
         let targets: Vec<Target> = cx.update(|cx| blocking::run(cx, job)).await;
-        cx.update(|cx| {
-            for target in targets {
-                show(target, cx);
-            }
-            cx.activate(true);
-        });
+        for target in targets {
+            cx.update(|cx| show(target, cx));
+        }
+        cx.update(|cx| cx.activate(true));
     })
     .detach();
 }
@@ -124,10 +128,12 @@ fn show(target: Target, cx: &mut App) {
         (Target::Repo { session, loc }, Some(id)) => {
             kernel::nav::visit(cx, &loc);
             workspace.update(cx, |w, cx| {
-                w.show_in_session(id, session, Doc::from(loc), cx)
+                w.show_in_session_tab(id, session, Doc::from(loc), true, cx)
             });
         }
-        (Target::Loose(path), _) => workspace.update(cx, |w, cx| w.show(Doc::Loose(path), cx)),
+        (Target::Loose(path), _) => {
+            workspace.update(cx, |w, cx| w.show_tab(Doc::Loose(path), true, cx))
+        }
         (Target::Repo { .. }, None) => {}
     }
 }
@@ -141,12 +147,14 @@ mod tests {
     }
 
     #[test]
-    fn arguments_without_flags_are_the_paths_and_stay_absolute() {
-        let args = strings(&["detached", "--smoke", "-psn_0_1", "/a/b.rs", "c.md"]);
-        let paths = cli_paths(&args);
-        assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0], Path::new("/a/b.rs"));
-        assert!(paths[1].is_absolute() && paths[1].ends_with("c.md"));
+    fn arguments_that_are_files_stay_and_are_made_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("b.rs");
+        std::fs::write(&file, "").unwrap();
+        let file = file.to_string_lossy();
+        let dir = dir.path().to_string_lossy();
+        let args = strings(&["detached", "--smoke", "-psn_0_1", &file, &dir, "missing.md"]);
+        assert_eq!(cli_paths(&args), [PathBuf::from(&*file)]);
         assert!(cli_paths(&strings(&["detached"])).is_empty());
     }
 

@@ -113,7 +113,7 @@ mod mac {
     gpui_kit::actions!(detached, [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]);
 
     pub fn init(keys: Task<()>, cx: &mut App) {
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| detached_app::dock::quit(cx));
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());

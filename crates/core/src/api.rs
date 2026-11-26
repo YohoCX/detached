@@ -266,6 +266,16 @@ pub fn read_file(s: &AppState, repo: &str, rev: Option<&str>, path: &str) -> Res
     diff::content(s, Path::new(repo), &side, path)
 }
 
+/// A file outside any repo, read as `read_file` reads a working-tree one.
+pub fn read_loose(file: &Path) -> Result<Content> {
+    diff::loose(file)
+}
+
+/// Saves `text` to the file, keeping its line endings; returns what was written.
+pub fn write_text(file: &Path, text: &str) -> Result<String> {
+    diff::write_text(file, text)
+}
+
 /// The root of the git repo holding `file`, if any.
 pub fn repo_root(s: &AppState, file: &Path) -> Option<PathBuf> {
     let args = ["rev-parse", "--show-toplevel"];

@@ -68,7 +68,12 @@ impl FileView {
             })
             .ok();
         };
+        let this = cx.weak_entity();
+        let save = move |_: &mut Window, cx: &mut App| {
+            this.update(cx, |v, cx| v.save(cx).detach()).ok();
+        };
         let actions = vec![
+            actions::register(cx, "file.save", "Save", Group::View, save),
             actions::register(cx, "editor.gotoLine", "Go to Line", Group::Navigate, goto),
             actions::register(
                 cx,
@@ -99,6 +104,23 @@ impl FileView {
         };
         view.load(window, cx);
         view
+    }
+
+    pub(super) fn unsaved(&self, cx: &App) -> bool {
+        self.code.read(cx).unsaved()
+    }
+
+    pub(super) fn save(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+        let repo = self.loc.repo.clone();
+        let file = std::path::Path::new(&repo).join(&self.loc.path);
+        let saved = self.code.update(cx, |c, cx| c.save(file, cx));
+        cx.spawn(async move |_, cx| {
+            let ok = saved.await;
+            if ok {
+                cx.update(|cx| kernel::invalidate::status(cx, &repo).detach());
+            }
+            ok
+        })
     }
 
     pub(super) fn position(&self, cx: &App) -> Option<crate::dock::ViewPosition> {
@@ -145,13 +167,16 @@ impl FileView {
         let (text, conflicted) = match content {
             Ok(Content::Text { text }) => (text, false),
             Ok(Content::Conflicted { text }) => (text, true),
+            _ if self.code.read(cx).unsaved() => return,
             Ok(c) => return self.placeholder(describe(&c), cx),
             Err(e) => return self.placeholder(e, cx),
         };
         let (path, line) = (&self.loc.path, self.loc.line.unwrap_or(1));
         let shown = reveal && crate::dock::is_doc_view_shown(self.viewer, cx);
         let restored = self.restored.take();
+        let editable = self.loc.rev.is_none();
         self.code.update(cx, |c, cx| {
+            c.set_editable(editable, cx);
             c.set(path, &text, !reveal, window, cx);
             if let Some(at) = restored {
                 c.restore(at, cx);

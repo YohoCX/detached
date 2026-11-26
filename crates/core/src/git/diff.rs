@@ -375,6 +375,45 @@ fn classify(bytes: Vec<u8>) -> Content {
     }
 }
 
+/// A file outside any repo: UTF-8 text, else binary.
+pub fn loose(path: &Path) -> Result<Content> {
+    let size = fs::metadata(path)?.len();
+    if size > MAX_SIZE {
+        return Ok(Content::TooLarge { size });
+    }
+    let bytes = fs::read(path)?;
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) if !text.as_bytes()[..text.len().min(8192)].contains(&0) => Content::Text { text },
+        _ => Content::Binary,
+    })
+}
+
+/// Writes `text` over the file, keeping its CRLF line endings and final newline; returns what it wrote.
+/// A symlink or a file that is not UTF-8 is refused, as the editor never showed it whole.
+pub fn write_text(path: &Path, text: &str) -> Result<String> {
+    let refuse = |why: &str| Err(Error::Other(format!("not saved: {why}")));
+    if fs::symlink_metadata(path).is_ok_and(|m| m.is_symlink()) {
+        return refuse("the file is a symlink");
+    }
+    let old = match fs::read(path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(old) => old,
+            Err(_) => return refuse("the file on disk is not UTF-8"),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let mut out = text.replace("\r\n", "\n");
+    if old.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if old.contains("\r\n") {
+        out = out.replace('\n', "\r\n");
+    }
+    fs::write(path, &out)?;
+    Ok(out)
+}
+
 fn worktree(env: &Env, repo: &Path, path: &str) -> Result<Content> {
     if !super::files::working_path(repo, Path::new(path)) {
         return Ok(Content::Missing);
@@ -781,5 +820,31 @@ mod tests {
             assert_eq!(img(None, "nested/out.svg"), None);
             assert_eq!(img(None, "alias.svg"), svg);
         }
+    }
+
+    #[test]
+    fn write_text_keeps_crlf_and_the_final_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("f");
+        std::fs::write(&f, "a\r\nb\r\n").unwrap();
+        assert_eq!(write_text(&f, "a\nx\nb").unwrap(), "a\r\nx\r\nb\r\n");
+        assert_eq!(std::fs::read(&f).unwrap(), b"a\r\nx\r\nb\r\n");
+        std::fs::write(&f, "a\nb").unwrap();
+        assert_eq!(write_text(&f, "a\nc").unwrap(), "a\nc");
+        std::fs::write(&f, [0xff, 0xfe]).unwrap();
+        assert!(write_text(&f, "x").is_err());
+        assert_eq!(std::fs::read(&f).unwrap(), [0xff, 0xfe]);
+    }
+
+    #[test]
+    fn loose_files_are_text_binary_or_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("f");
+        std::fs::write(&f, "hi").unwrap();
+        assert_eq!(loose(&f).unwrap(), Content::Text { text: "hi".into() });
+        std::fs::write(&f, [0xff, 0xfe]).unwrap();
+        assert_eq!(loose(&f).unwrap(), Content::Binary);
+        std::fs::write(&f, vec![b'x'; MAX_SIZE as usize + 1]).unwrap();
+        assert_eq!(loose(&f).unwrap(), Content::TooLarge { size: MAX_SIZE + 1 });
     }
 }
