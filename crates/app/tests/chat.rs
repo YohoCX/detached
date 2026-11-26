@@ -3587,15 +3587,10 @@ fn a_file_goes_with_its_text_and_a_big_one_as_a_link(cx: &mut TestAppContext) {
     std::fs::write(&small, "hello").unwrap();
     std::fs::write(&big, vec![0u8; 150_000]).unwrap();
     paste_files(cx, &[&small, &big]);
-    wait_until(cx, |cx| cx.find("chat.attached.1").is_some());
-    assert_eq!(
-        label(cx, "chat.attached.0").as_deref(),
-        Some("small.txt · 5 B")
-    );
-    assert_eq!(
-        label(cx, "chat.attached.1").as_deref(),
-        Some("big.bin · 146 KB")
-    );
+    wait_until(cx, |cx| {
+        label(cx, "chat.attached.0").as_deref() == Some("small.txt · 5 B")
+            && label(cx, "chat.attached.1").as_deref() == Some("big.bin · 146 KB")
+    });
     cx.input("fake: parts");
     cx.press("enter");
     wait_for_item(cx, "text,text,text");
@@ -3604,6 +3599,73 @@ fn a_file_goes_with_its_text_and_a_big_one_as_a_link(cx: &mut TestAppContext) {
             .iter()
             .any(|i| i == "Attached: small.txt, big.bin")
     );
+}
+
+#[gpui_kit::test]
+fn a_file_with_nul_bytes_goes_as_a_link(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("nul.dat");
+    std::fs::write(&file, b"ab\0cd").unwrap();
+    paste_files(cx, &[&file]);
+    wait_until(cx, |cx| {
+        label(cx, "chat.attached.0").as_deref() == Some("nul.dat · 5 B")
+    });
+    cx.input("fake: parts");
+    cx.press("enter");
+    wait_for_item(cx, "link");
+}
+
+#[gpui_kit::test]
+fn a_file_that_cannot_be_read_holds_the_message_back(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let dir = tempfile::tempdir().unwrap();
+    paste_files(cx, &[dir.path()]);
+    assert!(
+        cx.find("chat.attached.0").is_some(),
+        "the chip is there at once"
+    );
+    wait_until(cx, |cx| {
+        label(cx, "chat.attached.0").is_some_and(|l| !l.contains("reading"))
+    });
+    say(cx, "hello");
+    assert!(cx.find("chat.attached.0").is_some());
+    assert!(!items(cx).iter().any(|i| i.contains("hello")));
+}
+
+#[gpui_kit::test]
+fn an_image_over_5_mb_is_refused_on_send(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let image = Image::from_bytes(ImageFormat::Png, vec![0; (5 << 20) + 1]);
+    paste_item(cx, ClipboardEntry::Image(image));
+    cx.press("enter");
+    assert!(cx.find("chat.attached.0").is_some());
+    assert!(items(cx).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_whitespace_only_paste_makes_no_chip(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    paste(
+        cx,
+        &"
+"
+        .repeat(40),
+    );
+    assert!(cx.find("chat.paste.0").is_none());
+}
+
+#[gpui_kit::test]
+fn a_queued_prompt_of_attachments_is_named_by_its_first_chip(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "one; wait g1");
+    wait_for_item(cx, "said one");
+    let image = Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]);
+    paste_item(cx, ClipboardEntry::Image(image.clone()));
+    paste_item(cx, ClipboardEntry::Image(image));
+    cx.press("enter");
+    wait_until(cx, |cx| cx.find("chat.queue.0").is_some());
+    assert_eq!(label(cx, "chat.queue.0").as_deref(), Some("image.png +1"));
 }
 
 #[gpui_kit::test]
