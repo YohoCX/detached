@@ -16,8 +16,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Anchor, AnyElement, App, AppContext, ClipboardEntry, ClipboardItem, Context, Div, Entity,
     EntityId, ExternalPaths, FocusHandle, FontWeight, ImageFormat, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, ParentElement, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, canvas, div,
+    KeyDownEvent, ListAlignment, ListState, MouseButton, ParentElement, Render, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, canvas, div, list,
     prelude::FluentBuilder, px, relative,
 };
 
@@ -45,7 +45,6 @@ use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
 /// How close to the end still counts as following it.
-const FOLLOW: f32 = 24.;
 const SUGGESTIONS: u32 = 8;
 /// Past conversations an empty chat offers.
 const PAST: usize = 5;
@@ -207,7 +206,8 @@ pub struct ChatView {
     menu: Option<usize>,
     /// How many of `size::INLINE` and `size::WEEK` the composer is as wide as.
     room: usize,
-    scroll: ScrollHandle,
+    /// Lays out only the rows on screen, so a long chat costs a keystroke no more than a short one.
+    list: ListState,
     suggest: Option<Suggest>,
     /// Groups of tool calls opened or closed against their default, by their first call's id.
     toggled: HashSet<String>,
@@ -231,6 +231,17 @@ pub struct ChatView {
     _subscriptions: Vec<Subscription>,
 }
 
+/// A row of the transcript, by its first item's index in the feed.
+#[derive(Clone, Copy)]
+enum Row {
+    Divider,
+    Item(usize),
+    Group(usize, usize),
+    Docs(usize),
+    /// A turn's changes and docs, with its end.
+    Changes(usize),
+}
+
 impl ChatView {
     pub fn new(session: Entity<Chat>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (p, draft, back) = session.update(cx, |s, _| {
@@ -252,7 +263,6 @@ impl ChatView {
         let composer_focus = cx.focus_handle();
         let agents = Agents::global(cx);
         agents.update(cx, |a, cx| a.ensure_loaded(cx));
-        let scroll = ScrollHandle::new();
         let subscriptions = vec![
             cx.observe_in(&session, window, |this, session, window, cx| {
                 if let Some(text) = session.update(cx, |s, _| s.draft.take()) {
@@ -301,7 +311,6 @@ impl ChatView {
         session.update(cx, |s, cx| s.check_trust(cx));
         let repo = session.read(cx).repo.clone();
         let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
-        scroll.scroll_to_bottom();
         let seen = session.read(cx).feed(cx).count();
         ChatView {
             session,
@@ -312,7 +321,7 @@ impl ChatView {
             provider_focus: cx.focus_handle(),
             menu: None,
             room: 0,
-            scroll,
+            list: ListState::new(0, ListAlignment::Bottom, px(200.)),
             suggest: None,
             toggled: HashSet::new(),
             outputs: HashSet::new(),
@@ -383,7 +392,7 @@ impl ChatView {
             self.attached.clear();
             self.input.update(cx, |s, cx| s.set_value("", window, cx));
             self.composer_changed(cx);
-            self.scroll.scroll_to_bottom();
+            self.list.scroll_to_end();
         }
     }
 
@@ -1288,13 +1297,59 @@ impl ChatView {
     }
 
     /// The items, with each run of tool calls folded into one group.
-    fn feed(&self, cx: &App) -> Vec<AnyElement> {
+    /// The transcript's rows: a list item each.
+    fn rows(&self, cx: &App) -> Vec<Row> {
         let chat = self.session.read(cx);
         let feed: Vec<_> = chat.feed(cx).collect();
         let tool = |it: &Item| matches!(it, Item::Tool(t) if t.status.as_deref() != Some("denied"));
+        let cut = chat.cleared(&feed, cx);
+        let open = cut.is_some() && self.earlier == cut;
+        let mut divider = cut.is_some();
+        let mut out = vec![];
+        let mut push = |i: usize, row: Row| {
+            if Some(i) == cut && std::mem::take(&mut divider) {
+                out.push(Row::Divider);
+            }
+            out.push(row);
+        };
+        let mut i = cut.filter(|_| !open).unwrap_or(0);
+        while i < feed.len() {
+            if matches!(feed[i].1, Item::Changes { .. } | Item::Docs { .. }) {
+                let (from, session) = (i, feed[i].0.0);
+                while let Some((_, item)) = feed.get(i).filter(|(at, _)| at.0 == session) {
+                    match item {
+                        Item::Changes { .. } => {}
+                        Item::Docs { .. } => push(i, Row::Docs(i)),
+                        _ => break,
+                    }
+                    i += 1;
+                }
+                if matches!(feed.get(i), Some((at, Item::End { .. })) if at.0 == session) {
+                    i += 1;
+                }
+                push(from, Row::Changes(from));
+                continue;
+            }
+            match feed[i..].iter().take_while(|(_, it)| tool(it)).count() {
+                0 | 1 => {
+                    push(i, Row::Item(i));
+                    i += 1;
+                }
+                n => {
+                    push(i, Row::Group(i, n));
+                    i += n;
+                }
+            }
+        }
+        out
+    }
+
+    fn transcript_row(&self, row: Row, cx: &App) -> AnyElement {
+        let chat = self.session.read(cx);
+        let feed: Vec<_> = chat.feed(cx).collect();
+        let muted = theme(cx).muted;
         // Widest before a turn (None past the end is the queued message), tight between actions
         // and above a turn's end.
-        let muted = theme(cx).muted;
         let gap = |i: usize| match (
             i.checked_sub(1).map(|p| feed[p].1),
             feed.get(i).map(|f| f.1),
@@ -1305,30 +1360,25 @@ impl ChatView {
             | (_, Some(Item::End { .. } | Item::PastTurn(_) | Item::Changes { .. })) => 8.,
             _ => 16.,
         };
-        let cut = chat.cleared(&feed, cx);
-        let open = cut.is_some() && self.earlier == cut;
-        let mut divider = cut.map(|_| self.divider(open, cut, cx));
-        let mut out = vec![];
-        let mut push = |i: usize, el: AnyElement| {
-            if Some(i) == cut {
-                out.extend(divider.take());
+        let (i, el) = match row {
+            Row::Divider => {
+                let cut = chat.cleared(&feed, cx);
+                return self.divider(self.earlier == cut, cut, cx);
             }
-            let el = div().flex().flex_col().pt(px(gap(i))).child(el);
-            out.push(match i >= self.seen {
-                true => ui::appear(("chat.in", i), el, 4., ui::motion::BASE).into_any_element(),
-                false => el.into_any_element(),
-            });
-        };
-        let mut i = cut.filter(|_| !open).unwrap_or(0);
-        while i < feed.len() {
-            if matches!(feed[i].1, Item::Changes { .. } | Item::Docs { .. }) {
-                let from = i;
-                let session = feed[i].0.0;
+            Row::Item(i) => (i, self.item(i, feed[i], cx)),
+            Row::Group(i, n) => (i, self.group(i, &feed[i..i + n], cx)),
+            Row::Docs(i) => match feed[i].1 {
+                Item::Docs { repo, needs } => (i, self.docs(i, repo, needs, cx)),
+                _ => return div().into_any_element(),
+            },
+            Row::Changes(from) => {
+                let session = feed[from].0.0;
+                let mut i = from;
                 let mut changes = Vec::new();
                 while let Some(&(at, item)) = feed.get(i).filter(|(at, _)| at.0 == session) {
                     match item {
                         Item::Changes { .. } => changes.push(self.changes(i, at, item, cx)),
-                        Item::Docs { repo, needs } => push(i, self.docs(i, repo, needs, cx)),
+                        Item::Docs { .. } => {}
                         _ => break,
                     }
                     i += 1;
@@ -1339,7 +1389,6 @@ impl ChatView {
                     feed.get(i).filter(|(at, _)| at.0 == session)
                 {
                     row = row.child(self.item(i, (at, item), cx));
-                    i += 1;
                     separator = true;
                 }
                 let mut details = Vec::new();
@@ -1352,30 +1401,20 @@ impl ChatView {
                     separator = true;
                     details.extend(detail);
                 }
-                push(
-                    from,
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(size::GAP)
-                        .child(row)
-                        .children(details)
-                        .into_any_element(),
-                );
-                continue;
+                let el = div()
+                    .flex()
+                    .flex_col()
+                    .gap(size::GAP)
+                    .child(row)
+                    .children(details);
+                (from, el.into_any_element())
             }
-            match feed[i..].iter().take_while(|(_, it)| tool(it)).count() {
-                0 | 1 => {
-                    push(i, self.item(i, feed[i], cx));
-                    i += 1;
-                }
-                n => {
-                    push(i, self.group(i, &feed[i..i + n], cx));
-                    i += n;
-                }
-            }
+        };
+        let el = div().flex().flex_col().pt(px(gap(i))).child(el);
+        match i >= self.seen {
+            true => ui::appear(("chat.in", i), el, 4., ui::motion::BASE).into_any_element(),
+            false => el.into_any_element(),
         }
-        out
     }
 
     /// "Context cleared" over the last `/clear`, folding what came before it.
@@ -2761,15 +2800,17 @@ fn tokens(n: u64) -> String {
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        // Pinned to the bottom stays pinned when new output or a narrower pane makes it taller.
-        let scroll = &self.scroll;
-        if f32::from(scroll.max_offset().y + scroll.offset().y) < FOLLOW {
-            scroll.scroll_to_bottom();
-        }
         self.follow(window, cx);
         self.lay_out(cx);
-        let items = self.feed(cx);
-        let empty = items.is_empty().then(|| self.empty(cx));
+        let rows = self.rows(cx);
+        // Rows on screen are laid out every frame; the rest keep their last height until shown.
+        let had = self.list.item_count();
+        match rows.len().cmp(&had) {
+            std::cmp::Ordering::Greater => self.list.splice(had..had, rows.len() - had),
+            std::cmp::Ordering::Less => self.list.splice(rows.len()..had, 0),
+            std::cmp::Ordering::Equal => {}
+        }
+        let empty = rows.is_empty().then(|| self.empty(cx));
         let review = self.review(cx);
         let footer = self.footer(cx);
         let suggestions = self.suggestions(cx);
@@ -2797,6 +2838,26 @@ impl Render for ChatView {
         )
         .absolute()
         .size_full();
+        let me = self.me.clone();
+        let rows = list(self.list.clone(), move |ix, _, cx| {
+            let row = rows.get(ix).copied();
+            let el = row
+                .zip(me.upgrade())
+                .map(|(row, me)| me.read(cx).transcript_row(row, cx));
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .px(size::INSET)
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(size::CONVERSATION)
+                        .min_w_0()
+                        .children(el),
+                )
+                .into_any_element()
+        });
         let transcript = div()
             .id("chat.items")
             .test_support()
@@ -2805,24 +2866,23 @@ impl Render for ChatView {
             .items_center()
             .flex_1()
             .min_h_0()
-            .px(size::INSET)
             .pt(size::PAD)
             .pb(size::GAP)
-            .overflow_hidden()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_none()
-                    .w_full()
-                    .max_w(size::CONVERSATION)
-                    .min_w_0()
-                    .children(items)
-                    .children(empty),
-            );
+            .map(|d| match empty {
+                Some(empty) => d
+                    .px(size::INSET)
+                    .overflow_y_scroll()
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .flex_none()
+                            .w_full()
+                            .max_w(size::CONVERSATION)
+                            .min_w_0()
+                            .child(empty),
+                    ),
+                None => d.child(rows.size_full()),
+            });
         let composer = div()
             .flex()
             .justify_center()

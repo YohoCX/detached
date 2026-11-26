@@ -141,13 +141,20 @@ fn id(cx: &mut TestApp, n: u32) -> String {
     id(cx).unwrap()
 }
 
+/// The drawn items' labels by their place in the feed; the list leaves rows off screen out, as "".
 fn items(cx: &mut VisualTestContext) -> Vec<String> {
     cx.update(|w, cx| {
         w.render_frame(cx);
-        (0usize..)
-            .map_while(|i| w.try_find(("chat.item", i)))
-            .map(|e| e.label().unwrap_or_default().to_string())
-            .collect()
+        let mut all: Vec<_> = (0usize..512)
+            .map(|i| {
+                w.try_find(("chat.item", i))
+                    .map(|e| e.label().unwrap_or_default().to_string())
+            })
+            .collect();
+        while all.last().is_some_and(Option::is_none) {
+            all.pop();
+        }
+        all.into_iter().map(Option::unwrap_or_default).collect()
     })
 }
 
@@ -718,10 +725,10 @@ fn the_scrolled_transcript_stays_below_the_tab_strip(cx: &mut TestAppContext) {
     scroll(cx, 4000.);
     assert!(cx.find(first).unwrap().visible());
     scroll(cx, -60.);
-    let item = cx.find(first).unwrap();
-    assert!(item.bounds().top() > px(0.));
-    assert!(item.bounds().bottom() <= cx.find("chat.items").unwrap().bounds().top());
-    assert!(!item.visible());
+    // The list may leave a row off screen undrawn; drawn, it stays hidden above the transcript.
+    let top = cx.find("chat.items").unwrap().bounds().top();
+    let item = cx.find(first);
+    assert!(item.is_none_or(|i| i.bounds().bottom() <= top && !i.visible()));
 }
 
 #[gpui_kit::test]
@@ -3515,8 +3522,16 @@ fn send_delivers_the_input_and_each_paste_in_order(cx: &mut TestAppContext) {
     );
     cx.input("typed");
     cx.press("enter");
-    wait_for_item(cx, "You: typed");
-    assert_eq!(items(cx)[0], format!("You: typed\n\n{a}\n\n{b}"));
+    // The echo can push the long message off screen, where the list draws nothing.
+    let sent = format!("typed\n\n{a}\n\n{b}");
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| {
+            kernel::session::all(cx).any(|s| {
+                (s.read(cx).items.iter())
+                    .any(|i| matches!(i, kernel::session::Item::User(t) if *t == sent))
+            })
+        })
+    });
     assert!(cx.find("chat.paste.0").is_none(), "Send empties the chips");
 }
 
