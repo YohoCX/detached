@@ -1,12 +1,14 @@
 //! Live runs: the start form in the Council app, a run's header, participants and kept branches in
 //! its tab, and a line per run in the status bar.
 
+use std::time::Duration;
+
 use detached_core::adapters::{CLAUDE, CODEX};
 use detached_core::council::mode::Stage;
 use detached_core::council::record::State;
 use detached_core::council::run::{Over, Preview, Start};
-use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::input::InputState;
+use gpui_kit::base::{TestSupportExt, TestTextExt};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement,
@@ -23,22 +25,48 @@ use kernel::workspace::Workspace;
 use crate::ui::theme::{GAP, text};
 use crate::ui::{self, Edge, theme};
 
-/// What a run can be over, and the modes each takes, the first the default.
-const SUBJECTS: [(&str, &[(&str, &str)]); 5] = [
-    ("Branch", &[("review", "Review"), ("gate", "Gate")]),
-    (
-        "MR",
-        &[("triage", "Triage"), ("review", "Review"), ("gate", "Gate")],
-    ),
-    ("Issue", &[("triage", "Triage")]),
-    ("Document", &[("plan-review", "Plan review")]),
-    (
-        "Question",
-        &[("dialectic", "Dialectic"), ("brainstorm", "Brainstorm")],
-    ),
+/// What a run can be over, and the modes each takes with what it does, the first the default.
+const SUBJECTS: [(&str, &[(&str, &str, &str)]); 5] = [
+    ("Branch", &[REVIEW, GATE]),
+    ("MR", &[TRIAGE, REVIEW, GATE]),
+    ("Issue", &[TRIAGE]),
+    ("Document", &[PLAN_REVIEW]),
+    ("Question", &[DIALECTIC, BRAINSTORM]),
 ];
+const REVIEW: (&str, &str, &str) = (
+    "review",
+    "Review",
+    "Find bugs and design issues; a second pass verifies each finding",
+);
+const GATE: (&str, &str, &str) = (
+    "gate",
+    "Gate",
+    "Is it OK to merge: a review that blocks on critical or major findings",
+);
+const TRIAGE: (&str, &str, &str) = (
+    "triage",
+    "Triage",
+    "What to do with it: the facts from the code and the case for and against",
+);
+const PLAN_REVIEW: (&str, &str, &str) = (
+    "plan-review",
+    "Plan review",
+    "Check the plan against the code it plans for, with the edit that fixes each problem",
+);
+const DIALECTIC: (&str, &str, &str) = (
+    "dialectic",
+    "Dialectic",
+    "Two sides argue the question from the code and rebut each other, then a verdict",
+);
+const BRAINSTORM: (&str, &str, &str) = (
+    "brainstorm",
+    "Brainstorm",
+    "Several framings propose ideas for the question, clustered and ranked",
+);
 
-/// The start form: the subject, the mode, what its trust makes of it, and the estimate.
+const DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// The start form in four steps: the subject, the mode, who works, the trust; the estimate and Start below.
 pub(super) struct Form {
     repo: String,
     /// Its index in `SUBJECTS`.
@@ -52,12 +80,16 @@ pub(super) struct Form {
     untrusted: bool,
     /// Codex verifies first.
     codex: bool,
+    /// Step 3 shows the verifier and the budget.
+    change: bool,
     preview: Option<Result<Preview, String>>,
     rounds: Interest<Rounds>,
     busy: bool,
     checking: Option<Task<()>>,
+    typing: Option<Task<()>>,
     pub done: bool,
     _settings: Subscription,
+    _inputs: Vec<Subscription>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -71,29 +103,48 @@ impl Form {
                     .default_value(text)
             })
         };
+        let (branch, base) = (
+            input(&branch, "Branch", window, cx),
+            input("main", "Base", window, cx),
+        );
+        let item = input(
+            "",
+            "MR or issue number, the document's path, or your question",
+            window,
+            cx,
+        );
+        let budget = input("", "Budget in tokens (optional)", window, cx);
+        let _inputs = [&branch, &base, &item, &budget]
+            .into_iter()
+            .map(|i| {
+                cx.subscribe(i, |f: &mut Form, _, e: &InputEvent, cx| {
+                    if matches!(e, InputEvent::Change) {
+                        f.edited(cx)
+                    }
+                })
+            })
+            .collect();
         let mut f = Form {
-            branch: input(&branch, "Branch", window, cx),
-            base: input("main", "Base", window, cx),
-            item: input(
-                "",
-                "MR or issue number, the document's path, or your question",
-                window,
-                cx,
-            ),
-            budget: input("", "Budget in tokens (optional)", window, cx),
+            branch,
+            base,
+            item,
+            budget,
             rounds: Interest::view(kernel::council::rounds(cx, &repo), cx),
             repo,
             kind: 0,
             mode: "review",
             untrusted: false,
             codex: false,
+            change: false,
             preview: None,
             busy: false,
             checking: None,
+            typing: None,
             done: false,
             _settings: cx.observe(&Settings::global(cx), |this: &mut Form, _, cx| {
                 this.check(cx)
             }),
+            _inputs,
             _tasks: vec![],
         };
         f.check(cx);
@@ -132,7 +183,18 @@ impl Form {
         })
     }
 
+    /// An input changed: the preview is stale until the typing pauses.
+    fn edited(&mut self, cx: &mut Context<Self>) {
+        (self.preview, self.checking) = (None, None);
+        self.typing = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(DEBOUNCE).await;
+            this.update(cx, |f, cx| f.check(cx)).ok();
+        }));
+        cx.notify();
+    }
+
     fn check(&mut self, cx: &mut Context<Self>) {
+        self.typing = None;
         let t = match self.start(cx) {
             Ok(s) => live::preview(s, cx),
             Err(e) => {
@@ -172,22 +234,14 @@ impl Form {
     fn estimate(&self, cx: &App) -> Option<u64> {
         self.rounds.read(cx).value.as_ref()?.estimate(self.mode)
     }
-}
 
-impl Render for Form {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
-        let providers = crate::chat::provider_config(cx);
-        let mut body = div()
-            .id("council.form")
-            .test_support()
-            .flex()
-            .flex_col()
-            .gap(GAP)
-            .p(GAP);
+    /// Step 1: the subject, and what it is of.
+    fn subject(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let kinds: Vec<(usize, &str)> = SUBJECTS.iter().map(|s| s.0).enumerate().collect();
-        let (me, again) = (cx.entity().downgrade(), cx.entity().downgrade());
-        body = body
+        let me = cx.entity().downgrade();
+        let field =
+            |input: &Entity<InputState>| div().flex_1().min_w_0().child(ui::input(input, cx));
+        ui::step("council.form.step.1", 1, "What to review", cx)
             .child(
                 ui::segmented(
                     "council.form.subject",
@@ -204,33 +258,107 @@ impl Render for Form {
                 )
                 .flex_wrap(),
             )
-            .when(self.kind != 1, |b| b.child(ui::input(&self.branch, cx)))
-            .when(self.kind == 0, |b| b.child(ui::input(&self.base, cx)))
-            .when(self.kind != 0, |b| {
-                b.child(
-                    div()
-                        .id("council.form.item")
-                        .test_support()
-                        .child(ui::input(&self.item, cx)),
-                )
-            })
-            .child(ui::segmented(
-                "council.form.mode",
-                SUBJECTS[self.kind].1,
-                self.mode,
-                move |mode, _, cx| {
-                    again
-                        .update(cx, |f, cx| {
-                            f.mode = mode;
-                            cx.notify();
-                        })
-                        .ok();
-                },
-                cx,
-            ))
-            .when(providers.shows(&CLAUDE) && providers.shows(&CODEX), |b| {
-                let me = cx.entity().downgrade();
-                b.child(ui::segmented(
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(GAP)
+                    .when(self.kind != 1, |d| d.child(field(&self.branch)))
+                    .when(self.kind == 0, |d| {
+                        d.child(div().text_color(theme(cx).muted).child("→"))
+                            .child(field(&self.base))
+                    })
+                    .when(self.kind != 0, |d| {
+                        d.child(
+                            div()
+                                .id("council.form.item")
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .child(ui::input(&self.item, cx)),
+                        )
+                    }),
+            )
+    }
+
+    /// Step 2: the modes of the subject, each with what it does.
+    fn modes(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        let rows = SUBJECTS[self.kind]
+            .1
+            .iter()
+            .enumerate()
+            .map(|(i, &(mode, title, about))| {
+                let on = mode == self.mode;
+                ui::pressable(i)
+                    .aria_toggled(on.into())
+                    .test_support()
+                    .items_start()
+                    .gap(GAP)
+                    .on_click(cx.listener(move |f, _, _, cx| {
+                        f.mode = mode;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_color(if on { t.accent } else { t.muted })
+                            .child(if on { "●" } else { "○" }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(title.test_text(title)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(text::SMALL)
+                                    .text_color(t.muted)
+                                    .child(about),
+                            ),
+                    )
+            });
+        ui::step("council.form.step.2", 2, "How", cx).child(
+            div()
+                .id("council.form.mode")
+                .flex()
+                .flex_col()
+                .gap(GAP)
+                .children(rows),
+        )
+    }
+
+    /// Step 3: who finds and who verifies, and under "change" the verifier and the budget.
+    fn who(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let providers = crate::chat::provider_config(cx);
+        let (claude, codex) = (providers.shows(&CLAUDE), providers.shows(&CODEX));
+        let who = match (claude, codex) {
+            (true, true) if self.codex => "Claude finds, Codex verifies",
+            (false, true) => "Codex verifies",
+            _ => "Claude finds and verifies",
+        };
+        let me = cx.entity().downgrade();
+        ui::step("council.form.step.3", 3, "Who", cx)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(GAP)
+                    .child(div().child(who))
+                    .child(
+                        ui::button("council.form.change", "change", cx)
+                            .test_support()
+                            .on_click(cx.listener(|f, _, _, cx| {
+                                f.change = !f.change;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(self.change && claude && codex, |s| {
+                s.child(ui::segmented(
                     "council.form.verifier",
                     &[(false, "Claude verifies"), (true, "Codex verifies")],
                     self.codex,
@@ -244,21 +372,17 @@ impl Render for Form {
                     cx,
                 ))
             })
-            .when(providers.shows(&CODEX) && !providers.shows(&CLAUDE), |b| {
-                b.child(crate::ui::page::muted("Codex verifies", cx))
-            })
-            .child(ui::input(&self.budget, cx))
-            .child(
-                div().flex().gap(GAP).child(
-                    ui::button("council.form.check", "Check", cx)
-                        .test_support()
-                        .on_click(cx.listener(|f, _, _, cx| f.check(cx))),
-                ),
-            );
+            .when(self.change, |s| s.child(ui::input(&self.budget, cx)))
+    }
+
+    /// Step 4: the trust of the subject, and what to do about it.
+    fn access(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        let mut s = ui::step("council.form.step.4", 4, "Access", cx);
         match &self.preview {
-            None => body = body.child(div().text_color(t.muted).child("Checking…")),
+            None => s = s.child(div().text_color(t.muted).child("Checking…")),
             Some(Err(e)) => {
-                body = body.child(
+                s = s.child(
                     div()
                         .id("council.form.error")
                         .test_support()
@@ -280,7 +404,7 @@ impl Render for Form {
                     ),
                     false => format!("Untrusted ({}): a sandboxed, read-only review", p.trust.why),
                 };
-                body = body.child(
+                s = s.child(
                     div()
                         .id("council.form.trust")
                         .test_support()
@@ -289,20 +413,24 @@ impl Render for Form {
                         .child(how),
                 );
                 let theirs = p.authors.iter().filter(|a| !a.2).count();
-                body = body.child(div().text_color(t.muted).child(format!(
+                s = s.child(div().text_color(t.muted).child(format!(
                     "{} commits, {theirs} not by your identities. Authorship can be forged.",
                     p.authors.len()
                 )));
-                body = body.children(p.authors.iter().filter(|a| !a.2).take(5).map(
-                    |(sha, who, _)| {
-                        div()
-                            .text_size(text::SMALL)
-                            .truncate()
-                            .child(format!("{sha} {who}"))
-                    },
-                ));
+                s = s.children(
+                    p.authors
+                        .iter()
+                        .filter(|a| !a.2)
+                        .take(5)
+                        .map(|(sha, who, _)| {
+                            div()
+                                .text_size(text::SMALL)
+                                .truncate()
+                                .child(format!("{sha} {who}"))
+                        }),
+                );
                 if !p.items.is_empty() && !p.accepted {
-                    body = body
+                    s = s
                         .child(
                             div()
                                 .text_color(t.warning)
@@ -315,7 +443,7 @@ impl Render for Form {
                         );
                     if p.trust.trusted {
                         let shown = p.clone();
-                        body = body.child(
+                        s = s.child(
                             ui::button("council.form.accept", "Accept these settings", cx)
                                 .test_support()
                                 .on_click(cx.listener(move |f, _, _, cx| {
@@ -331,7 +459,7 @@ impl Render for Form {
                         p.subject.branch.clone(),
                         p.subject.head_sha.clone(),
                     );
-                    body = body.child(
+                    s = s.child(
                         ui::button("council.form.mark", "Mark this branch trusted", cx)
                             .test_support()
                             .on_click(cx.listener(move |f, _, _, cx| {
@@ -352,11 +480,11 @@ impl Render for Form {
                 }
                 if p.trust.trusted {
                     let label = if self.untrusted {
-                        "Untrusted for this run"
+                        "Read-only for this run"
                     } else {
-                        "Run it untrusted this once"
+                        "Run it read-only"
                     };
-                    body = body.child(
+                    s = s.child(
                         ui::button("council.form.untrusted", label, cx)
                             .test_support()
                             .on_click(cx.listener(|f, _, _, cx| {
@@ -365,38 +493,69 @@ impl Render for Form {
                             })),
                     );
                 }
-                let estimate = self.estimate(cx).map_or(
-                    "Estimate: unknown, no earlier run of this mode".into(),
-                    |e| format!("Estimate: about {} tokens, from earlier runs", tokens(e)),
-                );
-                body = body.child(div().text_color(t.muted).child(estimate));
-                let ready = !self.busy && (!p.trust.trusted || p.accepted || p.items.is_empty());
-                body = body.child(
-                    ui::primary_button("council.form.start", "Start", cx)
-                        .test_support()
-                        .when(!ready, |b| b.opacity(0.5))
-                        .when(ready, |b| {
-                            b.on_click(cx.listener(|f, _, _, cx| {
-                                let Ok(mut s) = f.start(cx) else { return };
-                                if let Some(Ok(p)) = &f.preview {
-                                    s.head = Some(p.subject.head_sha.clone());
-                                }
-                                let p = live::start(s, cx);
-                                let (repo, task, round) = {
-                                    let p = p.read(cx);
-                                    (p.repo.clone(), p.task.clone(), p.run.clone())
-                                };
-                                Workspace::global(cx).update(cx, |w, cx| {
-                                    w.show(Doc::Council { repo, task, round }, cx)
-                                });
-                                f.done = true;
-                                cx.notify();
-                            }))
-                        }),
-                );
             }
         }
-        body
+        s
+    }
+
+    /// The estimate and Start, below the steps.
+    fn bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        let estimate = self
+            .estimate(cx)
+            .map_or("No estimate: no earlier run of this mode".into(), |e| {
+                format!("About {} tokens, from earlier runs", tokens(e))
+            });
+        let ready = !self.busy
+            && matches!(&self.preview, Some(Ok(p)) if !p.trust.trusted || p.accepted || p.items.is_empty());
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(GAP)
+            .pt(GAP)
+            .border_t_1()
+            .border_color(t.line)
+            .child(div().text_color(t.muted).child(estimate))
+            .child(
+                ui::primary_button("council.form.start", "Start", cx)
+                    .test_support()
+                    .when(!ready, |b| b.opacity(0.5))
+                    .when(ready, |b| {
+                        b.on_click(cx.listener(|f, _, _, cx| {
+                            let Ok(mut s) = f.start(cx) else { return };
+                            if let Some(Ok(p)) = &f.preview {
+                                s.head = Some(p.subject.head_sha.clone());
+                            }
+                            let p = live::start(s, cx);
+                            let (repo, task, round) = {
+                                let p = p.read(cx);
+                                (p.repo.clone(), p.task.clone(), p.run.clone())
+                            };
+                            Workspace::global(cx)
+                                .update(cx, |w, cx| w.show(Doc::Council { repo, task, round }, cx));
+                            f.done = true;
+                            cx.notify();
+                        }))
+                    }),
+            )
+    }
+}
+
+impl Render for Form {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("council.form")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap(GAP)
+            .p(GAP)
+            .child(self.subject(cx).into_any_element())
+            .child(self.modes(cx).into_any_element())
+            .child(self.who(cx).into_any_element())
+            .child(self.access(cx).into_any_element())
+            .child(self.bar(cx).into_any_element())
     }
 }
 

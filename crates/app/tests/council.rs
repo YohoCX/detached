@@ -1598,7 +1598,6 @@ fn an_mr_s_triage_from_the_council_app_shows_six_answers_and_its_fix_keeps_its_b
     settle(&app);
     app.click("council.form.item");
     app.input("7");
-    app.click("council.form.check");
     wait_until(&mut app, |cx| cx.find("council.form.trust").is_some());
     let trust = label(&mut app, "council.form.trust").unwrap();
     assert!(trust.starts_with("Trusted (trusted by repo"), "{trust}");
@@ -1705,7 +1704,6 @@ fn a_dialectic_and_a_brainstorm_on_a_question_from_the_council_app_show_their_ou
         settle(app);
         app.click("council.form.item");
         app.input("Should x stay one?");
-        app.click("council.form.check");
         wait_until(app, |cx| cx.find("council.form.trust").is_some());
         app.click("council.form.start");
         wait_watched(app, |cx| cx.find("council.ended").is_some());
@@ -1746,4 +1744,42 @@ fn a_dialectic_and_a_brainstorm_on_a_question_from_the_council_app_show_their_ou
         second.starts_with("2. Rewrite · value 3, cost 5"),
         "{second}"
     );
+}
+
+#[gpui_kit::test]
+fn the_start_form_has_four_steps_whose_modes_follow_the_subject_and_whose_start_is_last(
+    cx: &mut TestAppContext,
+) {
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        repo(sb, "reviewed");
+    });
+    open_tab(&mut app, "tab.council");
+    app.click("council.new");
+    wait_until(&mut app, |cx| cx.find("council.form.step.4").is_some());
+    let has = |app: &mut TestApp, mode: &str| {
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            texts(w).iter().any(|t| t.visible() && t.text() == mode)
+        })
+    };
+    let steps: Vec<_> = [
+        "council.form.step.1",
+        "council.form.step.2",
+        "council.form.step.3",
+        "council.form.step.4",
+    ]
+    .map(|id| app.find(id).unwrap().bounds())
+    .into();
+    assert!(steps.windows(2).all(|w| w[0].bottom() <= w[1].top()));
+    assert!(has(&mut app, "Gate") && !has(&mut app, "Dialectic"));
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        w.within("council.form.subject").click(4usize, cx)
+    });
+    settle(&app);
+    assert!(has(&mut app, "Dialectic") && !has(&mut app, "Gate"));
+    let start = app.find("council.form.start").unwrap().bounds();
+    assert!(start.top() >= steps[3].bottom(), "Start sits below Access");
+    assert!(app.find("council.form.check").is_none());
 }
