@@ -190,7 +190,7 @@ pub struct Session {
     pub queue: VecDeque<Prompt>,
     /// The attachments of `unsent` or `returned`, which come back with their text.
     pub kept: Vec<Part>,
-    /// A prompt to send in the next session.
+    /// A prompt to send in the next session, with `queue` behind it.
     pub unsent: Option<String>,
     /// A prompt to put back in the composer.
     pub returned: Option<String>,
@@ -740,7 +740,9 @@ impl Session {
         if let Some(id) = &self.id {
             crate::inbox::user_turn(cx, id);
         }
-        self.items.push(Item::User(prompt.text.clone()));
+        if !prompt.text.is_empty() {
+            self.items.push(Item::User(prompt.text.clone()));
+        }
         if !prompt.parts.is_empty() {
             self.items.push(Item::Attached(prompt.chips()));
         }
@@ -825,19 +827,26 @@ impl Session {
             (Some(trees), None) => return self.prompted(trees, prompt, cx),
         };
         if !self.woken {
-            // A note may have come after it, as a trust's while the snapshots ran.
-            if let Some(i) = self
-                .items
-                .iter()
-                .rposition(|i| matches!(i, Item::User(t) if *t == prompt.text))
-            {
-                let n = 1 + usize::from(matches!(self.items.get(i + 1), Some(Item::Attached(_))));
-                self.items.drain(i..i + n);
-                self.reindex_tools(i);
-            }
+            self.retract(&prompt);
             (self.unsent, self.kept) = (Some(prompt.text), prompt.parts);
         }
         self.close(end.unwrap_or(End::Closed), cx);
+    }
+
+    /// Takes the prompt's items back out; a note may have come after them, as a trust's.
+    fn retract(&mut self, prompt: &Prompt) {
+        let user = !prompt.text.is_empty();
+        let at = self.items.iter().rposition(|i| match i {
+            Item::User(t) => user && *t == prompt.text,
+            Item::Attached(_) => !user,
+            _ => false,
+        });
+        if let Some(i) = at {
+            let attached = matches!(self.items.get(i + 1), Some(Item::Attached(_)));
+            self.items
+                .drain(i..i + if user { 1 + usize::from(attached) } else { 1 });
+            self.reindex_tools(i);
+        }
     }
 
     fn prompted(
@@ -868,6 +877,10 @@ impl Session {
             }
             Err(e) => {
                 self.state = State::Idle;
+                if !self.woken {
+                    self.retract(&prompt);
+                    self.queue.push_front(prompt);
+                }
                 self.return_queue();
                 self.fail(format!("The prompt did not reach the agent: {e}"));
                 self.unwake();
@@ -1055,12 +1068,10 @@ impl Session {
         }
         match end {
             End::Closed | End::Trust => {
-                if let Some((text, parts)) = self.take_queue() {
-                    let text = match self.unsent.take() {
-                        Some(sent) => format!("{sent}\n\n{text}"),
-                        None => text,
-                    };
-                    (self.unsent, self.kept) = (Some(text), [&*self.kept, &parts].concat());
+                if self.unsent.is_none()
+                    && let Some(p) = self.queue.pop_front()
+                {
+                    (self.unsent, self.kept) = (Some(p.text), p.parts);
                 }
             }
             _ => self.return_queue(),
@@ -1240,6 +1251,7 @@ impl Session {
         self.drop_replies();
         let (began, starts) = self.turn.take().unwrap_or((Instant::now(), vec![]));
         self.failure = r.as_ref().err().cloned();
+        let normal = matches!(&r, Ok(t) if t.stop == StopReason::EndTurn);
         let stop = match r {
             Ok(t) => {
                 self.tokens += t.tokens.map_or(0, |(i, o)| i + o);
@@ -1323,7 +1335,7 @@ impl Session {
                     None if trust_moved => s.close(End::Trust, cx),
                     None if s.state == State::Running => {
                         s.state = State::Idle;
-                        if s.failure.is_some() {
+                        if !normal {
                             s.return_queue();
                         }
                         match s.queue.pop_front() {

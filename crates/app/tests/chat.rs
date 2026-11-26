@@ -2498,7 +2498,7 @@ fn a_named_session_s_chat_keeps_its_worktree_scope_in_the_background(cx: &mut Te
     cx.update(|_, cx| {
         let chat = chat::find(&repo, 0, cx).unwrap();
         chat.update(cx, |chat, cx| {
-            chat.send("query { workspace { repos { path } } }".into(), cx)
+            chat.send("query { workspace { repos { path } } }", cx)
         });
     });
     cx.click(row);
@@ -2994,7 +2994,7 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
     cx.update(|_, cx| {
         let chat = chat::find(&solo, 1, cx).unwrap();
         let text = "fake: say ready\nfake-wake: query { inbox { text } }";
-        chat.update(cx, |c, cx| c.send(text.into(), cx));
+        chat.update(cx, |c, cx| c.send(text, cx));
     });
     wait_for_item(cx, "ready");
     idle(cx);
@@ -3218,7 +3218,7 @@ fn an_empty_command_report_clears_live_and_cached_suggestions(cx: &mut TestAppCo
     let key = format!("codex\0{solo}");
     cx.update(|_, cx| {
         let chat = chat::find(&solo, 0, cx).unwrap();
-        chat.update(cx, |c, cx| c.send("clear-commands".into(), cx));
+        chat.update(cx, |c, cx| c.send("clear-commands", cx));
     });
     wait_until(cx, |cx| {
         cx.update(|_, cx| {
@@ -3368,7 +3368,7 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
         let solo = solo.clone();
         cx.update(|_, cx| {
             let chat = chat::find(&solo, 0, cx).unwrap();
-            chat.update(cx, |c, cx| c.send(text.into(), cx));
+            chat.update(cx, |c, cx| c.send(text, cx));
         })
     };
     send("bg", cx);

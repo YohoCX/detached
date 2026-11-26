@@ -253,7 +253,11 @@ impl Chat {
                 self.remembered = Some(commands);
             }
             if let Some(text) = unsent {
+                let queued = s.update(cx, |s, _| std::mem::take(&mut s.queue));
                 self.send(Prompt { text, parts: back }, cx);
+                for p in queued {
+                    self.send(p, cx);
+                }
             }
             let busy = s.read(cx).busy();
             if (self.was.1 && !busy) || ended {
