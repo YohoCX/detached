@@ -32,6 +32,7 @@ pub enum Act {
     Proc(ProcAct),
     Send(SendAct),
     Watch(WatchAct),
+    Council(CouncilAct),
 }
 
 impl Act {
@@ -48,6 +49,7 @@ impl Act {
             Act::Proc(_) => "proc",
             Act::Send(_) => "send",
             Act::Watch(_) => "watch",
+            Act::Council(_) => "council",
         }
     }
 }
@@ -251,6 +253,32 @@ pub struct WatchAct {
     pub pipeline: Option<String>,
 }
 
+/// Starts a Council over a subject, as the person's setting lets agents.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CouncilAct {
+    pub mode: String,
+    pub over: CouncilOver,
+    /// The repo's path; the asking session's when left out.
+    pub repo: Option<String>,
+    /// Tokens after which the run pauses and asks.
+    pub budget: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CouncilOver {
+    /// A local branch against `base` (main when left out).
+    Branch {
+        branch: String,
+        base: Option<String>,
+    },
+    Mr(u64),
+    Issue(u64),
+    /// A document's path in the repo's current branch.
+    Document(String),
+    Question(String),
+}
+
 /// The server: `answer` takes each tool call, and its error goes back to the agent as the call's.
 pub fn server(answer: impl Fn(Call) -> Result<Value, String> + Send + Sync + 'static) -> Tools {
     Arc::new(move |m: Value| {
@@ -369,6 +397,16 @@ fn tools() -> Value {
             "pipeline": s("A pipeline's id; the branch's newest when neither is given")}),
         &["repo"],
     );
+    let council = object(
+        json!({"mode": one_of(&["review", "gate", "triage", "plan-review", "dialectic", "brainstorm"]),
+            "over": {"type": "object", "description": "What the run is over, as one of: {\"branch\": {\"branch\": \"feat/x\", \
+                \"base\": \"main\"}} (review, gate), {\"mr\": 7} (triage, review, gate), {\"issue\": 3} \
+                (triage), {\"document\": \"PLAN.md\"} (plan-review), {\"question\": \"...\"} (dialectic, \
+                brainstorm)"},
+            "repo": s("The repo's path; this session's when left out"),
+            "budget": {"type": "integer", "description": "Tokens after which the run pauses and asks"}}),
+        &["mode", "over"],
+    );
     let read = object(
         json!({"query": s("A GraphQL query, such as { schema }")}),
         &["query"],
@@ -376,9 +414,9 @@ fn tools() -> Value {
     let act = object(
         json!({"action": one_of(&["report_finding", "report_verdict", "report_group",
                 "report_outcome", "report_synthesis", "report_idea", "report_rank", "done", "proc",
-                "send", "watch"]),
+                "send", "watch", "council"]),
             "args": {"anyOf": [finding, verdict, group, outcome, synthesis, idea, rank, done, proc,
-                send, watch],
+                send, watch, council],
                 "description": "The action's arguments"}}),
         &["action", "args"],
     );
@@ -394,7 +432,10 @@ fn tools() -> Value {
             dialectic's synthesis, an idea, an idea's rank, or `done` at the end of the work, which \
             every turn of a council ends with; `proc` starts, stops or restarts a defined process where its definition \
             lets agents; `send` messages a session of this one's group; `watch` puts one message \
-            into this session's inbox when a process is ready or a pipeline ends."},
+            into this session's inbox when a process is ready or a pipeline ends; `council` starts a \
+            Council, several agents that review a branch, MR, issue or document or argue a question, as \
+            the person's setting allows: it may ask them first, and the answer is the run's id, \
+            whose results `councils` in `detached_read` gives. A Council's own participants cannot."},
     ]})
 }
 
@@ -467,6 +508,29 @@ mod tests {
             panic!("{got:?}")
         };
         assert_eq!(f.name(), "report_finding");
+    }
+
+    #[test]
+    fn a_council_act_names_its_subject() {
+        let act =
+            |args: Value| serde_json::from_value::<Act>(json!({"action": "council", "args": args}));
+        let Ok(Act::Council(c)) =
+            act(json!({"mode": "review", "over": {"branch": {"branch": "feat/x"}}, "budget": 9}))
+        else {
+            panic!()
+        };
+        let over = CouncilOver::Branch {
+            branch: "feat/x".into(),
+            base: None,
+        };
+        assert_eq!(
+            (c.over.clone(), c.budget, c.repo.clone()),
+            (over, Some(9), None)
+        );
+        assert_eq!(Act::Council(c).name(), "council");
+        let mr = act(json!({"mode": "triage", "over": {"mr": 7}, "repo": "/r"}));
+        assert!(matches!(mr, Ok(Act::Council(c)) if c.over == CouncilOver::Mr(7)));
+        assert!(act(json!({"mode": "review", "over": {"tag": "v1"}})).is_err());
     }
 
     #[test]

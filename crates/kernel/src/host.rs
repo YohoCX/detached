@@ -93,11 +93,11 @@ impl Identity {
     }
 
     /// A session's by its kind: the chat reads as the owner, runs processes where their definitions
-    /// let agents, messages its group and watches; any other kind reads its repo alone.
+    /// let agents, messages its group, watches and starts a Council; any other kind reads its repo alone.
     pub fn of(kind: Kind, repo: &str) -> Identity {
         match kind {
             Kind::Chat => Identity {
-                can: &["proc", "send", "watch"],
+                can: &["proc", "send", "watch", "council"],
                 ..Identity::owner()
             },
             Kind::Verifier | Kind::Untrusted => Identity::subject(repo, None),
@@ -112,6 +112,9 @@ impl Identity {
     }
 
     pub fn may(&self, act: &Act) -> std::result::Result<(), String> {
+        if matches!(act, Act::Council(_)) && self.subject.is_some() {
+            return Err("A Council participant cannot start a Council.".into());
+        }
         if !self.can.contains(&act.name()) {
             return Err(format!("This session cannot {}.", act.name()));
         }

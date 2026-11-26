@@ -11,6 +11,7 @@ use gpui::{App, Entity};
 use crate::resource::{self, Policy, Resource};
 
 pub mod fixes;
+pub mod launch;
 pub mod live;
 
 pub struct Rounds {

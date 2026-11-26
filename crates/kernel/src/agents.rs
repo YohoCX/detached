@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use detached_core::adapters::{self, Catalog, Cli, Config, Entry, Installed, PROVIDERS, Provider};
-use detached_core::adapters::{BLOCK, LoginStatus, Version};
+use detached_core::adapters::{BLOCK, CouncilStart, LoginStatus, Version};
 use detached_core::error::{Error, Result};
 use detached_core::state::{AppState, Cancel};
 use detached_core::update::Progress;
@@ -388,6 +388,15 @@ impl Agents {
         })
         .detach();
     }
+}
+
+/// Sets whether agents may start a Council; the settings snapshot follows.
+pub fn set_council(cx: &App, start: CouncilStart) -> gpui::Task<Result<()>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || {
+        core.change_block(BLOCK, |c: &mut Config| c.council = start)
+            .map(drop)
+    })
 }
 
 #[cfg(test)]

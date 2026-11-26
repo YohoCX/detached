@@ -613,3 +613,29 @@ fn a_prompt_s_attachments_show_as_chips_after_it_and_a_resume_keeps_them(cx: &mu
     let resumed = open_spec(f.spec(Kind::Chat), id, cx);
     resumed.read_with(cx, |s, _| assert!(s.items.contains(&chips)));
 }
+
+#[gpui::test]
+fn a_council_call_is_refused_to_a_participant_and_where_the_setting_is_never(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::adapters::{BLOCK, Config as Agents, CouncilStart};
+    let f = boot(cx, &[]);
+    let act = json!({"action": "council",
+        "args": {"mode": "dialectic", "over": {"question": "why"}}});
+    let text = |r: Value| r["content"][0]["text"].as_str().unwrap().to_string();
+    let participant = open(&f, Kind::Untrusted, cx);
+    let refused = call(&participant, "detached_act", act.clone(), cx);
+    assert_eq!(refused["isError"], true);
+    assert_eq!(
+        text(refused),
+        "A Council participant cannot start a Council."
+    );
+    let never = |c: &mut Agents| c.council = CouncilStart::Never;
+    f.core.change_block(BLOCK, never).unwrap();
+    cx.update(crate::settings::refresh);
+    wait_until(cx, crate::settings::loaded);
+    let chat = open(&f, Kind::Chat, cx);
+    let refused = call(&chat, "detached_act", act, cx);
+    assert_eq!(refused["isError"], true);
+    assert!(text(refused).contains("does not let agents start a Council"));
+}

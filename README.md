@@ -80,7 +80,9 @@ Settings › Agents shows the CLI version and whether it is logged in when the C
   and is checked again. A subject you have not marked trusted, such as a merge request from a fork,
   gets a sandboxed, read-only review and no Fix. Stats shows how each role, lens and model did, and
   past revmux rounds can be imported. With Codex on, Codex can verify the findings. On Windows a
-  Council reviews only subjects you trusted; the sandboxed review needs WSL, not built yet.
+  Council reviews only subjects you trusted; the sandboxed review needs WSL, not built yet. A chat's
+  agent can start a Council too: Settings › Agents asks you first (the default), lets it start
+  without asking, or never; trust rules stay the same.
 - **Agents read the client, not pasted text:** branches, merge requests, pipelines, docs and
   processes come to them through a read-only tool. Chats you put in one group can message each
   other.
