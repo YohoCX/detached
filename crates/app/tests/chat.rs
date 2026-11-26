@@ -13,8 +13,8 @@ use detached_core::chat_settings::{self, Preset};
 use gpui_kit::base::test_support::texts;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
-    AppContext, Role, ScrollDelta, SharedString, SystemNotificationResponse, TestAppContext,
-    VisualTestContext, point, px, size,
+    AppContext, ClipboardItem, Role, ScrollDelta, SharedString, SystemNotificationResponse,
+    TestAppContext, VisualTestContext, point, px, size,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -3409,4 +3409,80 @@ fn antigravity_chat_uses_unified_access_labels_and_thought_level(cx: &mut TestAp
 
 fn back_to_chat(cx: &mut TestApp) {
     cx.click("doc.chat");
+}
+
+fn paste(cx: &mut VisualTestContext, text: &str) {
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.into())));
+    cx.press("secondary-v");
+}
+
+fn rows(n: usize) -> String {
+    (0..n)
+        .map(|i| format!("row {i}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[gpui_kit::test]
+fn a_long_paste_becomes_a_chip_and_a_short_one_enters_the_input(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    paste(cx, "short");
+    assert_eq!(composer(cx).value(), Some("short"));
+    assert!(cx.find("chat.paste.0").is_none());
+    paste(cx, &rows(21));
+    assert_eq!(
+        composer(cx).value(),
+        Some("short"),
+        "the input is as it was"
+    );
+    assert_eq!(
+        label(cx, "chat.paste.0").as_deref(),
+        Some("Pasted text · 21 lines")
+    );
+    paste(cx, &"x".repeat(2001));
+    assert_eq!(
+        label(cx, "chat.paste.1").as_deref(),
+        Some("Pasted text · 1 line")
+    );
+    assert_eq!(composer(cx).value(), Some("short"));
+}
+
+#[gpui_kit::test]
+fn send_delivers_the_input_and_each_paste_in_order(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let (a, b) = (rows(25), format!("{}\ntail", rows(22)));
+    paste(cx, &a);
+    paste(cx, &b);
+    assert_eq!(
+        cx.find("chat.send").unwrap().disabled(),
+        None,
+        "chips alone can be sent"
+    );
+    cx.input("typed");
+    cx.press("enter");
+    wait_for_item(cx, "You: typed");
+    assert_eq!(items(cx)[0], format!("You: typed\n\n{a}\n\n{b}"));
+    assert!(cx.find("chat.paste.0").is_none(), "Send empties the chips");
+}
+
+#[gpui_kit::test]
+fn a_click_expands_a_chip_into_the_input_and_remove_drops_it(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let (a, b) = (rows(30), rows(40));
+    paste(cx, &a);
+    paste(cx, &b);
+    cx.click("chat.paste.0.remove");
+    assert_eq!(
+        label(cx, "chat.paste.0").as_deref(),
+        Some("Pasted text · 40 lines")
+    );
+    assert!(cx.find("chat.paste.1").is_none());
+    assert_eq!(
+        composer(cx).value(),
+        Some(""),
+        "remove does not put it back"
+    );
+    cx.click("chat.paste.0");
+    assert!(cx.find("chat.paste.0").is_none());
+    assert_eq!(composer(cx).value(), Some(b.as_str()));
 }

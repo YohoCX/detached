@@ -69,6 +69,8 @@ struct Choice {
 pub struct ChatView {
     session: Entity<Chat>,
     input: Entity<TextareaState>,
+    /// Long pastes held as chips; they join the message on Send.
+    pasted: Vec<String>,
     composer_focus: FocusHandle,
     provider_focus: FocusHandle,
     /// The agent's row the keys are on while its menu is open.
@@ -166,6 +168,7 @@ impl ChatView {
         ChatView {
             session,
             input,
+            pasted: Vec::new(),
             composer_focus,
             provider_focus: cx.focus_handle(),
             menu: None,
@@ -209,20 +212,81 @@ impl ChatView {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.input.read(cx).value().trim().to_string();
+        let typed = self.input.read(cx).value();
+        let parts = [&*typed]
+            .into_iter()
+            .chain(self.pasted.iter().map(String::as_str));
+        let text = parts
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         if text.is_empty() || self.session.read(cx).busy(cx) {
             return;
         }
         if self.session.update(cx, |s, cx| s.send(text, cx)) {
+            self.pasted.clear();
             self.input.update(cx, |s, cx| s.set_value("", window, cx));
             self.composer_changed(cx);
             self.scroll.scroll_to_bottom();
         }
     }
 
+    /// A paste of more than 20 lines or 2000 characters.
+    fn is_long(text: &str) -> bool {
+        text.lines().count() > 20 || text.chars().count() > 2000
+    }
+
+    /// Puts pasted text `i` back into the input at the cursor.
+    fn expand(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.pasted.remove(i);
+        self.input.update(cx, |s, cx| s.replace(text, window, cx));
+        self.focus(window, cx);
+        self.composer_changed(cx);
+    }
+
+    fn unpaste(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.pasted.remove(i);
+        self.focus(window, cx);
+        self.composer_changed(cx);
+    }
+
+    fn chips(&self, cx: &mut Context<Self>) -> Option<Div> {
+        const PREVIEW: usize = 12;
+        let chips = self.pasted.iter().enumerate().map(|(i, text)| {
+            let (open, remove) = (self.me.clone(), self.me.clone());
+            let n = text.lines().count();
+            let mut tip = text.lines().take(PREVIEW).collect::<Vec<_>>().join("\n");
+            if n > PREVIEW {
+                tip.push_str("\n…");
+            }
+            let label = format!(
+                "Pasted text · {n} {}",
+                if n == 1 { "line" } else { "lines" }
+            );
+            ui::chip(
+                SharedString::from(format!("chat.paste.{i}")),
+                label,
+                Some(Icon::File),
+                Some(tip.into()),
+                move |window, cx| {
+                    open.update(cx, |this, cx| this.expand(i, window, cx)).ok();
+                },
+                move |window, cx| {
+                    remove
+                        .update(cx, |this, cx| this.unpaste(i, window, cx))
+                        .ok();
+                },
+                cx,
+            )
+        });
+        let row = div().flex().flex_wrap().gap(size::GAP).children(chips);
+        (!self.pasted.is_empty()).then_some(row)
+    }
+
     fn composer_changed(&mut self, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
-        let has_draft = !input.value().is_empty();
+        let has_draft = !input.value().is_empty() || !self.pasted.is_empty();
         self.session.update(cx, |s, _| s.has_draft = has_draft);
         self._files = None;
         if self.refresh_slash(cx) {
@@ -377,6 +441,7 @@ impl ChatView {
     }
 
     fn textarea(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let me = self.me.clone();
         div()
             .capture_action(cx.listener(|this, _: &Enter, window, cx| {
                 if this.suggest.is_some() {
@@ -405,7 +470,17 @@ impl ChatView {
             .child(
                 Textarea::new(&self.input)
                     .appearance(false)
-                    .text_size(theme::doc::BODY),
+                    .text_size(theme::doc::BODY)
+                    .on_paste(move |item, _, cx| {
+                        let Some(text) = item.text().filter(|t| Self::is_long(t)) else {
+                            return false;
+                        };
+                        me.update(cx, |this, cx| {
+                            this.pasted.push(text);
+                            this.composer_changed(cx);
+                        })
+                        .is_ok()
+                    }),
             )
     }
 
@@ -586,7 +661,7 @@ impl ChatView {
             },
         );
         let busy = chat.busy(cx);
-        let empty = self.input.read(cx).value().trim().is_empty();
+        let empty = self.input.read(cx).value().trim().is_empty() && self.pasted.is_empty();
         // A pill puts its label first.
         let send = if busy {
             ui::button("chat.stop", "Stop", cx)
@@ -2389,6 +2464,7 @@ impl Render for ChatView {
                                     cx.notify();
                                 }
                             }))
+                            .children(self.chips(cx))
                             .child(self.textarea(cx))
                             .child(bar),
                     ),

@@ -26,7 +26,10 @@ fn checkout(app: &TestApp, name: &str) -> String {
         &["worktree", "add", path.to_str().unwrap(), "feature"],
     );
     // The app lists the long path; Windows' temp dir is the 8.3 one (RUNNER~1).
-    detached_core::os::canonical(&path).unwrap().display().to_string()
+    detached_core::os::canonical(&path)
+        .unwrap()
+        .display()
+        .to_string()
 }
 
 fn open_session(app: &mut TestApp, paths: &[String]) {
