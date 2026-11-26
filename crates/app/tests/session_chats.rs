@@ -231,7 +231,7 @@ fn overview_shows_the_latest_chat_message_and_opens_the_chat(cx: &mut TestAppCon
     let key = Keystroke::parse("f24").unwrap();
     cx.update(|w, cx| {
         let run = chat.read(cx).current().unwrap().read(cx);
-        assert_eq!(run.queued.as_deref(), Some(prompt));
+        assert_eq!(run.queue.front().map(|p| p.text.as_str()), Some(prompt));
         w.dispatch_keystroke(key.clone(), cx);
         assert!(w.find(row).visible());
         assert_eq!(w.find(preview).label(), Some(prompt));
@@ -239,7 +239,7 @@ fn overview_shows_the_latest_chat_message_and_opens_the_chat(cx: &mut TestAppCon
     });
     std::fs::write(cx.sb.path("claude/overview-start"), "").unwrap();
     wait_until(cx, |cx| {
-        cx.update(|_, cx| chat.read(cx).current().unwrap().read(cx).queued.is_none())
+        cx.update(|_, cx| chat.read(cx).current().unwrap().read(cx).queue.is_empty())
     });
     cx.update(|w, cx| {
         w.dispatch_keystroke(key.clone(), cx);
@@ -361,7 +361,7 @@ fn resumed_chats_skip_replay_and_show_the_queued_prompt(cx: &mut TestAppContext)
             chat.current().unwrap().clone()
         });
         let first = older.update(cx, |run, cx| {
-            let first = Item::User(run.queued.take().unwrap());
+            let first = Item::User(run.queue.pop_front().unwrap().text);
             run.items.push(first.clone());
             run.end(cx);
             first

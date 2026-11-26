@@ -74,12 +74,16 @@ fn row(i: usize, tab: chat::Tab, cx: &App) -> AnyElement {
             let line = message.trim_start().lines().next()?;
             Some(SharedString::from(util::clip(line.trim_end(), 256)))
         };
-        chat.queued(cx).and_then(snippet).or_else(|| {
-            chat.feed(cx).rev().find_map(|(_, item)| match item {
-                Item::User(message) | Item::Text(message) => snippet(message),
-                _ => None,
+        chat.queued(cx)
+            .first()
+            .copied()
+            .and_then(snippet)
+            .or_else(|| {
+                chat.feed(cx).rev().find_map(|(_, item)| match item {
+                    Item::User(message) | Item::Text(message) => snippet(message),
+                    _ => None,
+                })
             })
-        })
     });
     let doc = Doc::Chat { repo, n };
     ui::pressable(("overview.chats.row", i))

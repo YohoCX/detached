@@ -221,7 +221,7 @@ impl ChatView {
             .filter(|p| !p.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        if text.is_empty() || self.session.read(cx).busy(cx) {
+        if text.is_empty() {
             return;
         }
         if self.session.update(cx, |s, cx| s.send(text, cx)) {
@@ -282,6 +282,31 @@ impl ChatView {
         });
         let row = div().flex().flex_wrap().gap(size::GAP).children(chips);
         (!self.pasted.is_empty()).then_some(row)
+    }
+
+    /// One chip per queued prompt: a click takes it back into the input, the × drops it.
+    fn queue_rows(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let lines: Vec<String> = (self.session.read(cx).queued(cx).iter())
+            .map(|t| t.lines().next().unwrap_or_default().to_owned())
+            .collect();
+        let rows: Vec<_> = lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let (open, remove) = (self.session.clone(), self.session.clone());
+                ui::chip(
+                    SharedString::from(format!("chat.queue.{i}")),
+                    line,
+                    Some(Icon::Up),
+                    None,
+                    move |_, cx| open.update(cx, |s, cx| s.unqueue(i, true, cx)),
+                    move |_, cx| remove.update(cx, |s, cx| s.unqueue(i, false, cx)),
+                    cx,
+                )
+            })
+            .collect();
+        let col = div().flex().flex_col().items_start().gap(size::GAP);
+        (!rows.is_empty()).then(|| col.children(rows))
     }
 
     fn composer_changed(&mut self, cx: &mut Context<Self>) {
@@ -663,7 +688,7 @@ impl ChatView {
         let busy = chat.busy(cx);
         let empty = self.input.read(cx).value().trim().is_empty() && self.pasted.is_empty();
         // A pill puts its label first.
-        let send = if busy {
+        let stop = busy.then(|| {
             ui::button("chat.stop", "Stop", cx)
                 .role(Role::Button)
                 .aria_label("Stop")
@@ -677,7 +702,8 @@ impl ChatView {
                     this.focus(window, cx);
                 }))
                 .into_any_element()
-        } else {
+        });
+        let send = {
             let send = match empty {
                 true => ui::pill("chat.send", "Send")
                     .bg(t.header_bg)
@@ -727,6 +753,7 @@ impl ChatView {
             .text_size(text::SMALL)
             .child(pickers)
             .children(week)
+            .children(stop)
             .child(send)
     }
 
@@ -1051,9 +1078,6 @@ impl ChatView {
                     i += n;
                 }
             }
-        }
-        if let Some(text) = chat.queued(cx) {
-            push(feed.len(), self.user(feed.len(), text.to_owned(), cx));
         }
         out
     }
@@ -2438,6 +2462,7 @@ impl Render for ChatView {
                     .children(review)
                     .children(footer)
                     .children(suggestions)
+                    .children(self.queue_rows(cx))
                     .child(self.checkout_label(cx))
                     .child(
                         div()

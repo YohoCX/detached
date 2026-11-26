@@ -111,8 +111,23 @@ impl Chat {
         self.sessions.last()
     }
 
-    pub(crate) fn queued<'a>(&self, cx: &'a App) -> Option<&'a str> {
-        self.current()?.read(cx).queued.as_deref()
+    pub(crate) fn queued<'a>(&self, cx: &'a App) -> Vec<&'a str> {
+        let s = self.current().map(|s| s.read(cx));
+        s.into_iter()
+            .flat_map(|s| &s.queue)
+            .map(|p| p.text.as_str())
+            .collect()
+    }
+
+    /// Takes queued prompt `i` out of the queue, back into the input when `edit`.
+    pub(super) fn unqueue(&mut self, i: usize, edit: bool, cx: &mut Context<Self>) {
+        let Some(s) = self.current().cloned() else {
+            return;
+        };
+        if let Some(p) = s.update(cx, |s, cx| s.unqueue(i, cx)).filter(|_| edit) {
+            (self.draft, self.has_draft) = (Some(p.text), true);
+        }
+        cx.notify();
     }
 
     fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) -> Entity<Session> {

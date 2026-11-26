@@ -613,3 +613,109 @@ fn a_prompt_s_attachments_show_as_chips_after_it_and_a_resume_keeps_them(cx: &mu
     let resumed = open_spec(f.spec(Kind::Chat), id, cx);
     resumed.read_with(cx, |s, _| assert!(s.items.contains(&chips)));
 }
+
+fn running_with_two_queued(f: &Fixture, first: &str, cx: &mut TestAppContext) -> Entity<Session> {
+    let s = open(f, Kind::Chat, cx);
+    s.update(cx, |s, cx| {
+        s.prompt(first.into(), cx);
+        s.prompt("say two".into(), cx);
+        s.prompt("say three".into(), cx);
+    });
+    s
+}
+
+#[gpui::test]
+fn prompts_given_during_a_turn_queue_and_go_one_turn_each_in_order(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = running_with_two_queued(&f, "wait go;say one", cx);
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.state, State::Running);
+        assert_eq!(s.queue, ["say two", "say three"].map(Prompt::from));
+    });
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    wait_until(cx, |cx| {
+        let s = s.read(cx);
+        s.state == State::Idle && s.queue.is_empty()
+    });
+    s.read_with(cx, |s, _| {
+        let said = s.items.iter().filter_map(|i| match i {
+            Item::User(t) => Some(format!("user {t}")),
+            Item::Text(t) => Some(t.clone()),
+            Item::End { .. } => Some("end".into()),
+            _ => None,
+        });
+        let said: Vec<String> = said.collect();
+        let want = [
+            "user wait go;say one",
+            "one",
+            "end",
+            "user say two",
+            "two",
+            "end",
+            "user say three",
+            "three",
+            "end",
+        ];
+        assert_eq!(said, want, "{:?}", s.items);
+    });
+}
+
+#[gpui::test]
+fn cancel_returns_every_queued_prompt_joined(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let file = Part::File {
+        path: "a.txt".into(),
+        text: None,
+    };
+    let s = running_with_two_queued(&f, "wait never", cx);
+    s.update(cx, |s, cx| {
+        let parts = vec![file.clone()];
+        s.prompt_parts(
+            Prompt {
+                text: "four".into(),
+                parts,
+            },
+            cx,
+        );
+        s.cancel();
+        assert!(s.queue.is_empty());
+        assert_eq!(s.returned.as_deref(), Some("say two\n\nsay three\n\nfour"));
+        assert_eq!(s.kept, [file]);
+    });
+    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    s.read_with(cx, |s, _| {
+        assert!(
+            !s.items
+                .iter()
+                .any(|i| matches!(i, Item::User(t) if t == "say two"))
+        )
+    });
+}
+
+#[gpui::test]
+fn a_failed_turn_returns_the_queue_and_starts_nothing(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = running_with_two_queued(&f, "wait go;fail broke", cx);
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    s.read_with(cx, |s, _| {
+        assert!(s.queue.is_empty());
+        assert_eq!(s.returned.as_deref(), Some("say two\n\nsay three"));
+        assert!(
+            !s.items
+                .iter()
+                .any(|i| matches!(i, Item::User(t) if t == "say two"))
+        );
+    });
+}
+
+#[gpui::test]
+fn a_queued_prompt_taken_out_leaves_the_rest(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = running_with_two_queued(&f, "wait never", cx);
+    s.update(cx, |s, cx| {
+        assert_eq!(s.unqueue(0, cx), Some("say two".into()));
+        assert_eq!(s.queue, [Prompt::from("say three")]);
+        s.cancel();
+    });
+}

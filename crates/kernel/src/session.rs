@@ -2,7 +2,7 @@
 //! and end, with each turn's snapshots and trust checks and the host's answers to permissions. A
 //! view draws `items`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -186,9 +186,9 @@ pub struct Session {
     pub lacks: Vec<Piece>,
     /// Items before this came before the session started: on a resume, its history.
     pub history: usize,
-    /// A prompt given while the session starts, sent once it has.
-    pub queued: Option<String>,
-    /// The attachments of `queued`, `unsent` or `returned`, which come back with their text.
+    /// Prompts given while the session starts or a turn runs, one turn each once it has ended well.
+    pub queue: VecDeque<Prompt>,
+    /// The attachments of `unsent` or `returned`, which come back with their text.
     pub kept: Vec<Part>,
     /// A prompt to send in the next session.
     pub unsent: Option<String>,
@@ -524,7 +524,7 @@ impl Session {
             limits: None,
             lacks: vec![],
             history: 0,
-            queued: None,
+            queue: VecDeque::new(),
             kept: vec![],
             images: false,
             unsent: None,
@@ -681,9 +681,8 @@ impl Session {
         for setting in std::mem::take(&mut self.picked) {
             let _ = self.set(setting);
         }
-        if let Some(text) = self.queued.take() {
-            let parts = std::mem::take(&mut self.kept);
-            self.prompt_parts(Prompt { text, parts }, cx);
+        if let Some(p) = self.queue.pop_front() {
+            self.prompt_parts(p, cx);
         }
         if self.wake_due {
             self.wake(cx);
@@ -692,7 +691,7 @@ impl Session {
 
     /// A turn runs, or waits for the session to start.
     pub fn busy(&self) -> bool {
-        self.state == State::Running || self.queued.is_some()
+        self.state == State::Running || !self.queue.is_empty()
     }
 
     /// The repos the session snapshots: its own, or each one of its workspace in its folder.
@@ -720,8 +719,8 @@ impl Session {
 
     /// `prompt` with attachments.
     pub fn prompt_parts(&mut self, prompt: Prompt, cx: &mut Context<Self>) {
-        if self.state == State::Starting && self.queued.is_none() {
-            (self.queued, self.kept) = (Some(prompt.text), prompt.parts);
+        if matches!(self.state, State::Starting | State::Running) {
+            self.queue.push_back(prompt);
             return cx.notify();
         }
         if self.open.is_none() || self.state != State::Idle {
@@ -739,7 +738,7 @@ impl Session {
 
     /// New messages: an idle session takes a woken turn in the asking mode, a busy one once idle.
     pub(crate) fn wake(&mut self, cx: &mut Context<Self>) {
-        if self.state != State::Idle || self.queued.is_some() {
+        if self.state != State::Idle || !self.queue.is_empty() {
             self.wake_due = !matches!(self.state, State::Ended(_));
             return;
         }
@@ -858,6 +857,7 @@ impl Session {
             }
             Err(e) => {
                 self.state = State::Idle;
+                self.return_queue();
                 self.fail(format!("The prompt did not reach the agent: {e}"));
                 self.unwake();
             }
@@ -865,12 +865,36 @@ impl Session {
         cx.notify();
     }
 
-    /// Cancels the running turn or returns a queued prompt.
+    /// Takes the queued prompts out: their texts joined by blank lines, their parts together.
+    fn take_queue(&mut self) -> Option<(String, Vec<Part>)> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        let all = std::mem::take(&mut self.queue);
+        let text = all.iter().map(|p| p.text.as_str()).collect::<Vec<_>>();
+        Some((
+            text.join("\n\n"),
+            all.into_iter().flat_map(|p| p.parts).collect(),
+        ))
+    }
+
+    /// Drops queued prompt `i` out of the queue and hands it back.
+    pub fn unqueue(&mut self, i: usize, cx: &mut Context<Self>) -> Option<Prompt> {
+        let p = self.queue.remove(i);
+        cx.notify();
+        p
+    }
+
+    fn return_queue(&mut self) {
+        if let Some((text, parts)) = self.take_queue() {
+            (self.returned, self.kept) = (Some(text), parts);
+        }
+    }
+
+    /// Cancels the running turn and returns the queued prompts.
     pub fn cancel(&mut self) {
         self.wake_due = false;
-        if let Some(text) = self.queued.take() {
-            self.returned = Some(text);
-        }
+        self.return_queue();
         let (Some(o), State::Running) = (&self.open, &self.state) else {
             return;
         };
@@ -999,11 +1023,17 @@ impl Session {
         {
             o.cancel();
         }
-        if let Some(text) = self.queued.take() {
-            match end {
-                End::Closed | End::Trust => self.unsent = self.unsent.take().or(Some(text)),
-                _ => self.returned = Some(text),
+        match end {
+            End::Closed | End::Trust => {
+                if let Some((text, parts)) = self.take_queue() {
+                    let text = match self.unsent.take() {
+                        Some(sent) => format!("{sent}\n\n{text}"),
+                        None => text,
+                    };
+                    (self.unsent, self.kept) = (Some(text), [&*self.kept, &parts].concat());
+                }
             }
+            _ => self.return_queue(),
         }
         (self._watch, self.turn, self.ending) = (None, None, None);
         self.state = State::Ended(end);
@@ -1263,9 +1293,16 @@ impl Session {
                     None if trust_moved => s.close(End::Trust, cx),
                     None if s.state == State::Running => {
                         s.state = State::Idle;
-                        match s.wake_due {
-                            true => s.wake(cx),
-                            false => s.unwake(),
+                        if s.failure.is_some() {
+                            s.return_queue();
+                        }
+                        match s.queue.pop_front() {
+                            Some(p) => {
+                                s.unwake();
+                                s.prompt_parts(p, cx);
+                            }
+                            None if s.wake_due => s.wake(cx),
+                            None => s.unwake(),
                         }
                     }
                     None => {}

@@ -2165,6 +2165,60 @@ fn stopping_a_chat_during_start_puts_its_message_before_new_text(cx: &mut TestAp
     );
 }
 
+/// A turn held open, with "two" and "three" queued behind it.
+fn queued_two(cx: &mut VisualTestContext) {
+    say(cx, "one; wait g1");
+    wait_for_item(cx, "said one");
+    say(cx, "two");
+    say(cx, "three");
+    wait_until(cx, |cx| cx.find("chat.queue.1").is_some());
+}
+
+#[gpui_kit::test]
+fn queued_messages_go_one_per_turn_in_order(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    queued_two(cx);
+    assert_eq!(cx.find("chat.queue.0").unwrap().label(), Some("two"));
+    assert_eq!(cx.find("chat.queue.1").unwrap().label(), Some("three"));
+    assert_eq!(composer(cx).value(), Some(""));
+    std::fs::write(cx.sb.path("claude/g1"), "").unwrap();
+    wait_for_item(cx, "said three");
+    let all = items(cx);
+    let at = |t: &str| all.iter().position(|i| i.contains(t)).unwrap();
+    assert!(at("said one") < at("said two") && at("said two") < at("said three"));
+    assert!(cx.find("chat.queue.0").is_none());
+}
+
+#[gpui_kit::test]
+fn a_queued_message_is_dropped_or_taken_back(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    queued_two(cx);
+    cx.click("chat.queue.0.remove");
+    assert_eq!(cx.find("chat.queue.0").unwrap().label(), Some("three"));
+    assert!(cx.find("chat.queue.1").is_none());
+    cx.click("chat.queue.0");
+    wait_until(cx, |cx| composer(cx).value() == Some("three"));
+    assert!(cx.find("chat.queue.0").is_none());
+    std::fs::write(cx.sb.path("claude/g1"), "").unwrap();
+    idle(cx);
+    assert!(
+        !items(cx)
+            .iter()
+            .any(|i| i.contains("said two") || i.contains("said three"))
+    );
+}
+
+#[gpui_kit::test]
+fn stop_puts_the_queued_messages_back_into_the_input(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    queued_two(cx);
+    cx.click("chat.stop");
+    wait_until(cx, |cx| composer(cx).value() == Some("two\n\nthree"));
+    idle(cx);
+    assert!(cx.find("chat.queue.0").is_none());
+    assert!(!items(cx).iter().any(|i| i.contains("said two")));
+}
+
 #[gpui_kit::test]
 fn a_failed_start_restores_the_prompt_without_taking_focus(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {

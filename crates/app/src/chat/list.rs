@@ -521,7 +521,7 @@ impl ChatList {
                 if has(&q, title)
                     || has(&q, &tab.place)
                     || chat.is_some_and(|s| {
-                        s.queued(cx).is_some_and(|t| has(&q, t)) || s.feed(cx).any(|(_, i)| said(i))
+                        s.queued(cx).iter().any(|t| has(&q, t)) || s.feed(cx).any(|(_, i)| said(i))
                     })
                 {
                     let at = past.map(|p| p.modified);
