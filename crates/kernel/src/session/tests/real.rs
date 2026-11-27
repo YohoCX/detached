@@ -219,12 +219,12 @@ fn mid_command(name: &str, cx: &mut TestAppContext) -> (Fixture, Api, String, En
 
 #[gpui::test]
 #[ignore = "make agent-test"]
-fn the_first_tool_call_asks_under_default(cx: &mut TestAppContext) {
+fn the_first_tool_call_asks_in_ask_mode(cx: &mut TestAppContext) {
     let (f, _api) = boot(cx, json!([[bash("echo made > made.txt")], text("made")]));
     let s = open(&f, Kind::Chat, cx);
     assert_eq!(
         s.read_with(cx, |s, _| s.option("mode").map(String::from)),
-        Some("default".into())
+        Some("ask".into())
     );
     s.update(cx, |s, cx| s.prompt("go".into(), cx));
     wait_for(cx, START, |cx| waiting(&s, cx).is_some());
