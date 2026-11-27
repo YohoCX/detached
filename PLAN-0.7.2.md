@@ -2,8 +2,10 @@
 
 Images, files and long pastes in the chat, a message queue; files open from the system; an agent starts a Council; a start form a person reads in one pass.
 
-**Status (2026-11-26): tasks 1–9 and the fixes from the Opus and Astra review merged into main, unbuilt; next the
-owner's check run.**
+**Status (2026-11-27): released as v0.7.2. Tasks 1–9 and the review fixes merged into main; make check green on
+the owner's Mac. Check on main 975e40c was green on macOS and Windows, but one Codex test failed on Ubuntu
+(`a_codex_start_that_crashes_returns_its_message`, its prompt did not come back within 30 s). Its cause is not found
+yet. Agent's one failure was a stale mode name in a test, fixed.**
 
 ## Rulings
 
